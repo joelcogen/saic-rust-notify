@@ -49,6 +49,7 @@ impl Config {
 
 #[derive(Default)]
 struct Readings {
+    updated_at: Option<DateTime<Utc>>,
     latest: BTreeMap<String, Value>,
     fresh: BTreeMap<String, Value>,
 }
@@ -68,7 +69,14 @@ impl Readings {
             return Self::default();
         }
         let source = Source::Vehicle(base.to_owned());
-        let mut readings = Self::default();
+        let mut readings = Self {
+            updated_at: state
+                .latest(&source, "vehicle/refresh/lastVehicleState")
+                .and_then(|r| r.value.as_str())
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|s| s.with_timezone(&Utc)),
+            ..Self::default()
+        };
         for key in [
             "drivetrain/soc",
             "drivetrain/socTarget",
@@ -149,12 +157,35 @@ fn dashboard(r: &Readings) -> Value {
     ]
     .iter()
     .any(|k| !r.fresh.contains_key(*k));
+    let unavailable = soc.is_none()
+        || temp.is_none()
+        || outside.is_none()
+        || locked.is_none()
+        || charging.is_none()
+        || ac.is_none();
+    let freshness = match r.updated_at {
+        None if r.latest.is_empty() => "No data yet".to_owned(),
+        None => "Telemetry unavailable".to_owned(),
+        Some(stamp) => {
+            let time = stamp
+                .with_timezone(&chrono_tz::Europe::Brussels)
+                .format("%d/%m/%Y %H:%M");
+            let prefix = if stale {
+                "Stale · "
+            } else if unavailable {
+                "Telemetry unavailable · "
+            } else {
+                ""
+            };
+            format!("{prefix}Updated at {time}")
+        }
+    };
     json!({"trailing": rounded(soc, "%"), "metrics": [
         {"color": "#22C55E", "label": "Doors", "value": locked.map_or("?", |v| if v {"Locked"} else {"Unlocked"})},
         {"color": "#22C55E", "label": "Status", "value": status},
         {"color": "#22C55E", "label": "Temperature", "value": format!("{} • {}", rounded(temp,"º"), rounded(outside,"º"))},
         {"color": "#22C55E", "label": "A/C", "value": ac.map_or("?", |v| if v {"On"} else {"Off"})}],
-        "status": if stale {"Last known / stale"} else if soc.is_none() || temp.is_none() || outside.is_none() || locked.is_none() || charging.is_none() || ac.is_none() {"Telemetry unavailable"} else {"Current"}})
+        "status": freshness})
 }
 fn climate(r: &Readings) -> Value {
     let get = |k: &str| r.latest.get(k);

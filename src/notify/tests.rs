@@ -101,6 +101,11 @@ fn readings(values: &[(&str, &str)]) -> Readings {
         .map(|(k, v)| (k.to_string(), json!(v)))
         .collect();
     Readings {
+        updated_at: Some(
+            DateTime::parse_from_rfc3339("2026-11-13T13:32:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        ),
         fresh: latest.clone(),
         latest,
     }
@@ -133,7 +138,7 @@ fn payload_contracts_and_url_validation() {
         {"color":"#22C55E","label":"Doors","value":"Locked"},
         {"color":"#22C55E","label":"Status","value":"Charging"},
         {"color":"#22C55E","label":"Temperature","value":"5º • -2º"},
-        {"color":"#22C55E","label":"A/C","value":"On"}],"status":"Current"})
+        {"color":"#22C55E","label":"A/C","value":"On"}],"status":"Updated at 13/11/2026 14:32"})
     );
     assert_eq!(
         climate(&r),
@@ -144,7 +149,10 @@ fn payload_contracts_and_url_validation() {
         json!({"title":CHARGING,"symbol":"bolt.car.fill","tint":"#EF4444","body":"6.5 kW • 52%","progress":52.,"status":"charging","endsIn":900})
     );
     r.fresh.clear();
-    assert_eq!(dashboard(&r)["status"], "Last known / stale");
+    assert_eq!(
+        dashboard(&r)["status"],
+        "Stale · Updated at 13/11/2026 14:32"
+    );
     assert_eq!(charging_payload(&r)["progress"], Value::Null);
     assert_eq!(climate(&Readings::default())["body"], "?");
     for invalid in [
@@ -532,5 +540,69 @@ async fn status_and_notify_reads_never_request_live_data_even_when_missing_or_st
             requests.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
+    }
+}
+
+#[tokio::test]
+async fn widget_keeps_source_time_when_stale_disconnected_or_resent() {
+    let state = Arc::new(RwLock::new(Telemetry::default()));
+    let now = Instant::now();
+    let wall = DateTime::parse_from_rfc3339("2026-07-01T12:32:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ttl = Duration::from_secs(600);
+    assert_eq!(
+        dashboard(&Readings::read(&state, ttl, now, wall).await)["status"],
+        "No data yet"
+    );
+    for (key, value) in [
+        ("refresh/lastVehicleState", "2026-07-01T12:32:00Z"),
+        ("drivetrain/soc", "52"),
+        ("doors/locked", "true"),
+        ("drivetrain/charging", "false"),
+        ("climate/interiorTemperature", "20"),
+        ("climate/exteriorTemperature", "18"),
+        ("climate/remoteClimateState", "off"),
+    ] {
+        state
+            .write()
+            .await
+            .ingest(
+                decode(
+                    &format!("saic/test/vehicles/CAR/{key}"),
+                    value.as_bytes(),
+                    None,
+                )
+                .unwrap()
+                .unwrap(),
+                false,
+                now,
+            )
+            .unwrap();
+    }
+    state.write().await.set_connected(true);
+    let fresh = Readings::read(&state, ttl, now, wall).await;
+    assert_eq!(dashboard(&fresh)["status"], "Updated at 01/07/2026 14:32");
+    let later = Readings::read(
+        &state,
+        ttl,
+        now + Duration::from_secs(300),
+        wall + chrono::Duration::seconds(300),
+    )
+    .await;
+    assert_eq!(dashboard(&fresh), dashboard(&later));
+    for connected in [true, false] {
+        state.write().await.set_connected(connected);
+        let stale = Readings::read(
+            &state,
+            ttl,
+            now + Duration::from_secs(86400),
+            wall + chrono::Duration::days(1),
+        )
+        .await;
+        assert_eq!(
+            dashboard(&stale)["status"],
+            "Stale · Updated at 01/07/2026 14:32"
+        );
     }
 }

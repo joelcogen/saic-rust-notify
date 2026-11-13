@@ -244,3 +244,8 @@ HTTPS API address, and never sends vehicle controls (requires Docker and curl):
 ./scripts/build-container.sh saic-rust-notify:local
 ./tests/container.sh saic-rust-notify:local
 ```
+
+The Notify widget status shows `Updated at DD/MM/YYYY HH:MM` in Europe/Brussels
+time (including daylight saving), prefixed with `Stale ·` when readings are stale.
+It uses the stored vehicle observation timestamp, not notification delivery time.
+Before telemetry arrives, it shows `No data yet`. Widget updates do not poll the car.
