@@ -3,6 +3,7 @@ use std::{env, time::Duration};
 // Deliberately no Debug: this holds broker credentials and an account identifier.
 #[derive(Clone)]
 pub struct Config {
+    pub notify: crate::notify::Config,
     pub http_host: String,
     pub http_port: u16,
     pub api_token: Option<String>,
@@ -74,7 +75,9 @@ impl Config {
         if username.len() > 65535 || password.len() > 65535 || client_id.len() > 65535 {
             return Err("MQTT credentials and client ID must fit MQTT string limits".into());
         }
+        let notify = crate::notify::Config::load(&mut get)?;
         Ok(Self {
+            notify,
             http_host,
             http_port,
             api_token,

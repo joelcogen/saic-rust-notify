@@ -32,7 +32,14 @@ async fn main() {
                 std::process::exit(2);
             }
         };
+    let notifications = saic_rust_notify::notify::run(
+        config.notify.clone(),
+        state.clone(),
+        config.stale_after,
+        controls.preheating.subscribe(),
+    );
     tokio::select! {
+        _ = notifications => {},
         _ = mqtt::run_with_controls(config, state.clone(), commands, controls.results.clone(), shutdown()) => {},
         result = axum::serve(listener, app) => {
             if result.is_err() { tracing::error!("HTTP server stopped unexpectedly"); }
