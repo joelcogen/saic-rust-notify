@@ -168,7 +168,7 @@ async fn ordered_climate_commands_stop_on_failure_without_reads_or_replay() {
 }
 
 #[tokio::test]
-async fn locate_is_lights_only_and_refresh_is_the_only_action_that_reads() {
+async fn locate_is_lights_only_and_explicit_refresh_reads_both_sources() {
     let mut fake = Fake::default();
     execute(&mut fake, &state(), "SYNTHETIC", Action::Locate)
         .await
@@ -921,5 +921,144 @@ async fn failed_explicit_refresh_restores_readiness_but_not_freshness_after_relo
         let mut schedules = task.await.unwrap();
         assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, Some(parked));
         assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 60);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn climate_batch_refreshes_once_and_resumes_polling_without_replaying_commands() {
+    for temperature in [2., 5., 10.] {
+        for read_failure in [false, true] {
+            let now = chrono::Utc::now().timestamp();
+            let mut schedules = Schedules::default();
+            schedules
+                .vehicle("SYNTHETIC")
+                .success(now - schedule::WINDOW, Observation::default());
+            schedules
+                .vehicle("SYNTHETIC")
+                .success(now, Observation::default());
+            let mut fake = Fake {
+                read_failure,
+                vehicle: VehicleStatusResp {
+                    status_time: Some(now),
+                    basic_vehicle_status: Some(BasicVehicleStatus {
+                        remote_climate_status: Some(2),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let calls = fake.calls.clone();
+            let shared = state();
+            let worker_state = shared.clone();
+            let (tx, rx) = mpsc::channel(16);
+            let task = tokio::spawn(async move {
+                worker(&mut fake, &config(), &worker_state, rx, &mut schedules).await;
+                schedules
+            });
+            settle().await;
+            let (reply, receive) = oneshot::channel();
+            tx.send(Request {
+                vin: "SYNTHETIC".into(),
+                action: Action::Climate(temperature),
+                reply,
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive.await.unwrap(), Ok(climate_plan(temperature).1));
+            settle().await;
+            let mut expected = vec!["login".to_string(), "discovery".to_string()];
+            expected.extend(
+                climate_plan(temperature)
+                    .0
+                    .iter()
+                    .map(|c| serde_json::to_string(c).unwrap()),
+            );
+            expected.push("vehicle".into());
+            if read_failure {
+                expected.extend(["login".into(), "discovery".into()]);
+            } else {
+                expected.push("charge".into());
+                let snapshot = shared.read().await.snapshot(
+                    Instant::now(),
+                    chrono::Utc::now(),
+                    Duration::from_secs(600),
+                );
+                assert_eq!(
+                    snapshot["readings"]["vehicle/climate/remoteClimateState"]["value"],
+                    "on"
+                );
+                assert_eq!(
+                    snapshot["readings"]["vehicle/climate/remoteClimateState"]["fresh"],
+                    true
+                );
+            }
+            assert_eq!(*calls.lock().unwrap(), expected);
+            tokio::time::advance(Duration::from_secs(29)).await;
+            settle().await;
+            assert_eq!(*calls.lock().unwrap(), expected);
+            tokio::time::advance(Duration::from_secs(1)).await;
+            settle().await;
+            expected.push("vehicle".into());
+            if read_failure {
+                expected.extend(["login".into(), "discovery".into()]);
+            } else {
+                expected.push("charge".into());
+            }
+            assert_eq!(*calls.lock().unwrap(), expected);
+            drop(tx);
+            task.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_climate_batch_does_not_refresh_or_change_deadline() {
+    for failed_step in 0..5 {
+        let now = chrono::Utc::now().timestamp();
+        let mut schedules = Schedules::default();
+        schedules
+            .vehicle("SYNTHETIC")
+            .success(now, Observation::default());
+        let due = schedules.vehicle("SYNTHETIC").due();
+        let mut outcomes: VecDeque<_> = (0..failed_step)
+            .map(|_| Ok(CommandState::Completed))
+            .collect();
+        outcomes.push_back(Ok(CommandState::Rejected));
+        let mut fake = Fake {
+            outcomes,
+            ..Default::default()
+        };
+        let calls = fake.calls.clone();
+        let shared = state();
+        let (tx, rx) = mpsc::channel(16);
+        let task = tokio::spawn(async move {
+            worker(&mut fake, &config(), &shared, rx, &mut schedules).await;
+            schedules
+        });
+        settle().await;
+        let (reply, receive) = oneshot::channel();
+        tx.send(Request {
+            vin: "SYNTHETIC".into(),
+            action: Action::Climate(2.),
+            reply,
+        })
+        .await
+        .unwrap();
+        assert!(receive.await.unwrap().is_err());
+        settle().await;
+        drop(tx);
+        let mut schedules = task.await.unwrap();
+        assert_eq!(schedules.vehicle("SYNTHETIC").due(), due);
+        let mut expected = vec!["login".to_string(), "discovery".to_string()];
+        expected.extend(
+            climate_plan(2.)
+                .0
+                .iter()
+                .take(failed_step + 1)
+                .map(|c| serde_json::to_string(c).unwrap()),
+        );
+        expected.extend(["login".into(), "discovery".into()]);
+        assert_eq!(*calls.lock().unwrap(), expected);
     }
 }

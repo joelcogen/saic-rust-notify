@@ -77,8 +77,8 @@ No extra schedule or activity-detection API reads are added.
 
 All policy values are constants; there are no polling settings or modes. The
 former interval environment setting is ignored. Status and Notify reads only use
-stored telemetry, even when stale or missing; controls never trigger live reads.
-`POST /refresh` remains the explicit way to request an earlier live update.
+stored telemetry, even when stale or missing. A successful climate batch triggers
+one live refresh; `POST /refresh` also requests an earlier live update.
 
 The service atomically saves per-vehicle parking epochs, deadlines and backoff in
 `data/polling.json` relative to its working directory. Keys are hashed vehicle
@@ -140,8 +140,12 @@ standard temperature profile. At <=6°C it then heats left seat, right seat and
 steering wheel; at <=4°C it finally starts rear defrost. Each operation uses a
 client command builder and waits for completion before the next. The two seats
 are always independent commands. There are no status reads between commands.
-Controls leave scheduled polling deadlines unchanged; an explicit `/refresh` can
-request an earlier update. Controls are mutually exclusive.
+After the complete successful batch, the service refreshes vehicle and charging
+state once and updates the normal polling schedule from the observed activity.
+A failed refresh marks telemetry stale and enters polling backoff, but the climate
+request still succeeds and starts the preheating notification; commands are never
+replayed. Failed command batches do not trigger a refresh. Locate leaves polling
+deadlines unchanged. Controls are mutually exclusive.
 
 Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
 malformed JSON, unknown keys and bodies on status/refresh/locate return 400.

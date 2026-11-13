@@ -166,14 +166,22 @@ async fn worker(
                     let _ = request.reply.send(Err("A single authorized vehicle is required"));
                     continue;
                 }
+                let climate = matches!(request.action, Action::Climate(_));
                 let result = if matches!(request.action, Action::Refresh) {
                     poll_vehicle(client, state, &request.vin, schedules, &now).await
                         .map(|()| "Vehicle refreshed").map_err(|()| "Vehicle refresh failed")
                 } else {
-                    // Controls never change polling deadlines or parking age.
                     execute(client, state, &request.vin, request.action).await
                 };
-                if result.is_err() {
+                // Refresh once after the complete batch, using the same scheduling
+                // and backoff as an explicit refresh. A read failure must not turn
+                // completed commands into a failure that callers might retry.
+                let refresh_failed = climate && result.is_ok()
+                    && poll_vehicle(client, state, &request.vin, schedules, &now).await.is_err();
+                if refresh_failed {
+                    tracing::warn!("Climate completed but telemetry refresh failed; polling will retry");
+                }
+                if result.is_err() || refresh_failed {
                     state.write().await.fail_vehicle(&request.vin);
                     state.write().await.set_connected(false);
                     authenticated = false;

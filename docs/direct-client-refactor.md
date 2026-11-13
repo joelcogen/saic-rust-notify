@@ -8,8 +8,10 @@ and `../saic-mqtt-service` remain behavioral references, not dependencies.
 The HTTP and Notify contracts retain their existing reading names and heating
 thresholds. Direct commands use client builders and bounded event continuation.
 The worker serializes reads and entire command sequences. It never retries a
-control or inserts a status read between sequence steps. Controls leave the fixed per-vehicle polling deadlines unchanged. Durable parking
-epochs and deadlines in `data/polling.json` survive reconnects and restarts; see
+control or inserts a status read between sequence steps. After a successful climate
+batch, it refreshes once through the normal polling path to update telemetry and scheduling. Refresh failures enter polling backoff
+without changing command success or replaying commands. Locate leaves polling
+deadlines unchanged. Durable parking epochs and deadlines in `data/polling.json` survive reconnects and restarts; see
 the README for staged parking, charging and backoff rules. The client remains responsible for
 SAIC authentication, cryptography, transport and command payloads.
 
