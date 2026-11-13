@@ -262,6 +262,10 @@ async fn refresh(
     vin: &str,
 ) -> Result<Observation, ()> {
     let vehicle = client.vehicle(vin).await?;
+    if !valid_vehicle_timestamp(vehicle.status_time, chrono::Utc::now().timestamp()) {
+        tracing::warn!("Vehicle status timestamp invalid or outside 15-minute window");
+        return Err(());
+    }
     let charge = client.charge(vin).await?;
     let observation = Observation::read(&vehicle, &charge, chrono::Utc::now().timestamp());
     let now = Instant::now();
@@ -298,6 +302,15 @@ async fn refresh(
     }
     state.set_connected(true);
     Ok(observation)
+}
+
+// Match the gateway's invalid sentinels and inclusive 15-minute drift limit.
+fn valid_vehicle_timestamp(stamp: Option<i64>, now: i64) -> bool {
+    stamp.is_some_and(|stamp| {
+        !matches!(stamp, 0 | 2_147_483_647)
+            && chrono::DateTime::from_timestamp(stamp, 0).is_some()
+            && now.abs_diff(stamp) <= 15 * 60
+    })
 }
 
 type Readings = Vec<(&'static str, Value)>;

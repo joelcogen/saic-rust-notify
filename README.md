@@ -48,6 +48,12 @@ Controls and notifications require exactly one discovered vehicle. An explicit
 VIN selects only that vehicle after verifying account membership. Invalid or
 incomplete discovery fails closed. No controls run during discovery or polling.
 
+Vehicle status timestamps must be present, valid, and within 15 minutes of the
+current time (past or future). Rejected responses enter refresh failure backoff;
+they preserve parking age and the last snapshot, which is marked stale, and
+cannot trigger active polling. Charging data is not requested for rejected
+vehicle responses.
+
 ### Fixed polling policy
 
 Scheduling is independent per vehicle, following the gateway default precedence:

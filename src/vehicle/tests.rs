@@ -10,7 +10,6 @@ use std::{
 };
 use tokio::sync::RwLock;
 
-#[derive(Default)]
 struct Fake {
     calls: Arc<Mutex<Vec<String>>>,
     outcomes: VecDeque<Result<CommandState, ()>>,
@@ -22,6 +21,25 @@ struct Fake {
     active_vin: Option<String>,
     vehicle: VehicleStatusResp,
     charge: ChrgMgmtDataResp,
+}
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            calls: Default::default(),
+            outcomes: Default::default(),
+            login_failures: 0,
+            read_failure: false,
+            read_failures: 0,
+            vehicle_calls: Default::default(),
+            fleet: vec![],
+            active_vin: None,
+            vehicle: VehicleStatusResp {
+                status_time: Some(chrono::Utc::now().timestamp()),
+                ..Default::default()
+            },
+            charge: Default::default(),
+        }
+    }
 }
 impl Session for Fake {
     async fn login(&mut self) -> Result<(), ()> {
@@ -590,4 +608,80 @@ async fn worker_reauthentication_does_not_reset_exponential_backoff() {
     assert_eq!(calls.lock().unwrap().len(), 4);
     drop(tx);
     task.await.unwrap();
+}
+
+#[test]
+fn vehicle_timestamp_validation_matches_gateway_boundaries() {
+    let now = 1_800_000_000;
+    for stamp in [
+        None,
+        Some(0),
+        Some(2_147_483_647),
+        Some(i64::MIN),
+        Some(i64::MAX),
+        Some(now - 901),
+        Some(now + 901),
+    ] {
+        assert!(!valid_vehicle_timestamp(stamp, now));
+    }
+    for stamp in [now - 900, now, now + 900] {
+        assert!(valid_vehicle_timestamp(Some(stamp), now));
+    }
+    assert!(!valid_vehicle_timestamp(Some(2_147_483_647), 2_147_483_647));
+}
+
+#[tokio::test]
+async fn stale_active_responses_back_off_without_resetting_parking_or_telemetry() {
+    let now = chrono::Utc::now().timestamp();
+    let state = state();
+    let mut schedules = Schedules::default();
+    let mut fake = Fake::default();
+    fake.vehicle.basic_vehicle_status = Some(BasicVehicleStatus {
+        interior_temperature: Some(5),
+        ..Default::default()
+    });
+    poll_vehicle(&mut fake, &state, "SYNTHETIC", &mut schedules, &|| now)
+        .await
+        .unwrap();
+    let epoch = schedules.vehicle("SYNTHETIC").parked_since;
+    fake.active_vin = Some("SYNTHETIC".into());
+    for (index, stamp) in [Some(now - 901), None, Some(0), Some(now + 3600)]
+        .into_iter()
+        .enumerate()
+    {
+        fake.vehicle.status_time = stamp;
+        fake.calls.lock().unwrap().clear();
+        assert!(
+            poll_vehicle(&mut fake, &state, "SYNTHETIC", &mut schedules, &|| now)
+                .await
+                .is_err()
+        );
+        assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, epoch);
+        assert_eq!(
+            schedules.vehicle("SYNTHETIC").due(),
+            now + 30 * (1 << index)
+        );
+        assert_eq!(*fake.calls.lock().unwrap(), vec!["vehicle"]);
+        let snapshot = state.read().await.snapshot(
+            Instant::now(),
+            chrono::Utc::now(),
+            Duration::from_secs(600),
+        );
+        assert_eq!(
+            snapshot["readings"]["vehicle/climate/interiorTemperature"]["value"],
+            5
+        );
+        assert_eq!(
+            snapshot["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
+            false
+        );
+    }
+    fake.vehicle.status_time = Some(now);
+    poll_vehicle(&mut fake, &state, "SYNTHETIC", &mut schedules, &|| now)
+        .await
+        .unwrap();
+    assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, None);
+    assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 30);
+    schedules.vehicle("SYNTHETIC").failure(now);
+    assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 30);
 }
