@@ -14,6 +14,7 @@ struct Fake {
     calls: Arc<Mutex<Vec<String>>>,
     outcomes: VecDeque<Result<CommandState, ()>>,
     login_failures: usize,
+    discovery_failures: usize,
     read_failure: bool,
     read_failures: usize,
     vehicle_calls: Arc<Mutex<Vec<String>>>,
@@ -28,6 +29,7 @@ impl Default for Fake {
             calls: Default::default(),
             outcomes: Default::default(),
             login_failures: 0,
+            discovery_failures: 0,
             read_failure: false,
             read_failures: 0,
             vehicle_calls: Default::default(),
@@ -53,6 +55,10 @@ impl Session for Fake {
     }
     async fn vehicles(&mut self) -> Result<VehicleListResp, ()> {
         self.calls.lock().unwrap().push("discovery".into());
+        if self.discovery_failures > 0 {
+            self.discovery_failures -= 1;
+            return Err(());
+        }
         Ok(VehicleListResp {
             vin_list: Some(
                 if self.fleet.is_empty() {
@@ -375,7 +381,18 @@ async fn worker_retries_login_polls_and_never_replays_uncertain_commands() {
     .await
     .unwrap();
     assert!(receive.await.unwrap().unwrap_err().contains("unknown"));
-    assert!(!state.read().await.is_connected());
+    settle().await;
+    // Reauthentication restores readiness before the next scheduled read.
+    assert!(state.read().await.control_base().is_ok());
+    let snapshot =
+        state
+            .read()
+            .await
+            .snapshot(Instant::now(), chrono::Utc::now(), Duration::from_secs(600));
+    assert_eq!(
+        snapshot["readings"]["vehicle/refresh/lastVehicleState"]["fresh"],
+        false
+    );
     tokio::time::advance(Duration::from_secs(300)).await;
     for _ in 0..5 {
         tokio::task::yield_now().await;
@@ -684,4 +701,225 @@ async fn stale_active_responses_back_off_without_resetting_parking_or_telemetry(
     assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 30);
     schedules.vehicle("SYNTHETIC").failure(now);
     assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 30);
+}
+
+async fn http_request(
+    controls: &crate::controls::Controls,
+    method: &str,
+    path: &str,
+    authorized: bool,
+) -> (u16, String) {
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let mut request = Request::builder().method(method).uri(path);
+    if authorized {
+        request = request.header("authorization", "Bearer synthetic-token");
+    }
+    let response = crate::http::router(controls.clone(), Some("synthetic-token"))
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    (
+        response.status().as_u16(),
+        String::from_utf8(
+            to_bytes(response.into_body(), 100_000)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn restart_allows_authenticated_http_refresh_before_saved_deadline_without_telemetry() {
+    let now = chrono::Utc::now().timestamp();
+    let parked = now - schedule::WINDOW;
+    let path = std::env::temp_dir().join(format!("refresh-readiness-{}.json", std::process::id()));
+    let mut saved = Schedules::open(path.clone()).unwrap();
+    saved
+        .vehicle("SYNTHETIC")
+        .success(parked, Observation::default());
+    saved
+        .vehicle("SYNTHETIC")
+        .success(now, Observation::default());
+    saved.save().unwrap();
+    drop(saved);
+    let mut schedules = Schedules::open(path.clone()).unwrap();
+    let deadline = schedules.vehicle("SYNTHETIC").due();
+    assert_eq!(deadline, now + schedule::DAY);
+    let mut fake = Fake::default();
+    let calls = fake.calls.clone();
+    let shared = state();
+    let (controls, rx) = crate::controls::Controls::new(shared.clone(), Duration::from_secs(600));
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &shared, rx, &mut schedules).await;
+        schedules
+    });
+    settle().await;
+    tokio::time::advance(Duration::from_secs(60)).await;
+    settle().await;
+    let (code, body) = http_request(&controls, "GET", "/api/status", true).await;
+    assert_eq!(code, 200);
+    let status: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status["connected"], true);
+    assert_eq!(status["ready"], true);
+    assert_eq!(status["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(status["readings"], json!({}));
+    assert_eq!(
+        http_request(&controls, "POST", "/refresh", false).await.0,
+        401
+    );
+    assert_eq!(
+        controls.execute("/climate/start", None).await,
+        Err("Fresh vehicle temperature is unavailable")
+    );
+    assert_eq!(*calls.lock().unwrap(), vec!["login", "discovery"]);
+    assert_eq!(
+        http_request(&controls, "POST", "/refresh", true).await,
+        (202, "Vehicle refreshed".into())
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["login", "discovery", "vehicle", "charge"]
+    );
+    drop(controls);
+    let mut schedules = task.await.unwrap();
+    assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, Some(parked));
+    assert_eq!(schedules.vehicle("SYNTHETIC").due(), deadline);
+    let mut persisted = Schedules::open(path.clone()).unwrap();
+    assert_eq!(persisted.vehicle("SYNTHETIC").parked_since, Some(parked));
+    assert_eq!(persisted.vehicle("SYNTHETIC").due(), deadline);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn discovery_and_login_failures_deny_refresh_until_reauthenticated() {
+    for scenario in ["login", "discovery", "membership", "multiple"] {
+        let mut fake = Fake::default();
+        let mut config = config();
+        match scenario {
+            "login" => fake.login_failures = 1,
+            "discovery" => fake.discovery_failures = 1,
+            "membership" => config.vin = Some("OTHER".into()),
+            _ => fake.fleet = vec!["ONE".into(), "TWO".into()],
+        }
+        let mut schedules = Schedules::default();
+        for vin in ["SYNTHETIC", "ONE", "TWO"] {
+            schedules.vehicle(vin).next = chrono::Utc::now().timestamp() + 86400;
+        }
+        let calls = fake.vehicle_calls.clone();
+        let shared = state();
+        let (controls, rx) =
+            crate::controls::Controls::new(shared.clone(), Duration::from_secs(600));
+        let task = tokio::spawn(async move {
+            worker(&mut fake, &config, &shared, rx, &mut schedules).await;
+        });
+        settle().await;
+        let status: Value =
+            serde_json::from_str(&http_request(&controls, "GET", "/api/status", true).await.1)
+                .unwrap();
+        assert_eq!(status["ready"], false);
+        let error = controls.execute("/refresh", None).await.unwrap_err();
+        assert_eq!(
+            error,
+            if scenario == "multiple" {
+                "A single authorized vehicle is required"
+            } else {
+                "SAIC session or vehicle discovery unavailable"
+            }
+        );
+        assert!(calls.lock().unwrap().is_empty());
+        if matches!(scenario, "login" | "discovery") {
+            tokio::time::advance(Duration::from_secs(60)).await;
+            settle().await;
+            assert!(controls.state.read().await.control_base().is_ok());
+            assert!(calls.lock().unwrap().is_empty());
+            assert_eq!(
+                controls.execute("/refresh", None).await,
+                Ok("Vehicle refreshed")
+            );
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_explicit_refresh_restores_readiness_but_not_freshness_after_relogin() {
+    for stale in [false, true] {
+        let now = chrono::Utc::now().timestamp();
+        let mut schedules = Schedules::default();
+        let parked = now - schedule::WINDOW;
+        schedules
+            .vehicle("SYNTHETIC")
+            .success(parked, Observation::default());
+        schedules
+            .vehicle("SYNTHETIC")
+            .success(now, Observation::default());
+        let shared = state();
+        let mut fake = Fake::default();
+        fake.vehicle.basic_vehicle_status = Some(BasicVehicleStatus {
+            interior_temperature: Some(5),
+            ..Default::default()
+        });
+        refresh(&mut fake, &shared, "SYNTHETIC").await.unwrap();
+        fake.calls.lock().unwrap().clear();
+        if stale {
+            fake.vehicle.status_time = Some(now - 901);
+        } else {
+            fake.read_failure = true;
+        }
+        let calls = fake.calls.clone();
+        let (controls, rx) =
+            crate::controls::Controls::new(shared.clone(), Duration::from_secs(600));
+        let task = tokio::spawn(async move {
+            worker(&mut fake, &config(), &shared, rx, &mut schedules).await;
+            schedules
+        });
+        settle().await;
+        for _ in 0..2 {
+            assert_eq!(
+                controls.execute("/refresh", None).await,
+                Err("Vehicle refresh failed")
+            );
+            settle().await;
+            let state = controls.state.read().await;
+            assert!(state.control_base().is_ok());
+            let snapshot =
+                state.snapshot(Instant::now(), chrono::Utc::now(), Duration::from_secs(600));
+            assert_eq!(
+                snapshot["readings"]["vehicle/climate/interiorTemperature"]["value"],
+                5
+            );
+            assert_eq!(
+                snapshot["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
+                false
+            );
+            drop(state);
+            assert_eq!(
+                controls.execute("/climate/start", None).await,
+                Err("Fresh vehicle temperature is unavailable")
+            );
+        }
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                "login",
+                "discovery",
+                "vehicle",
+                "login",
+                "discovery",
+                "vehicle",
+                "login",
+                "discovery"
+            ]
+        );
+        drop(controls);
+        let mut schedules = task.await.unwrap();
+        assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, Some(parked));
+        assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + 60);
+    }
 }

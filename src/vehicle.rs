@@ -143,7 +143,13 @@ async fn worker(
                 continue;
             };
             vins = discovered;
-            state.write().await.select_vehicles(&vins);
+            {
+                let mut state = state.write().await;
+                state.select_vehicles(&vins);
+                // Session readiness does not require a telemetry read. Failed
+                // sources and observation ages still govern freshness.
+                state.set_connected(true);
+            }
             authenticated = true;
         }
         let due = vins

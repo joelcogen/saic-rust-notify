@@ -504,9 +504,9 @@ async fn status_and_notify_reads_never_request_live_data_even_when_missing_or_st
     state.write().await.select_vehicles(&["SYNTHETIC".into()]);
     let (controls, mut requests) = Controls::new(state.clone(), Duration::from_secs(600));
     let app = crate::http::router(controls, Some("synthetic-token"));
-    for connected in [false, true] {
+    for (connected, cached) in [(false, false), (true, false), (true, true)] {
         state.write().await.set_connected(connected);
-        if connected {
+        if cached {
             state
                 .write()
                 .await
@@ -523,6 +523,9 @@ async fn status_and_notify_reads_never_request_live_data_even_when_missing_or_st
             let r =
                 Readings::read(&state, Duration::from_secs(600), Instant::now(), Utc::now()).await;
             assert!(r.fresh.is_empty());
+            if !cached {
+                assert_eq!(dashboard(&r)["status"], "No data yet");
+            }
             let response = app
                 .clone()
                 .oneshot(

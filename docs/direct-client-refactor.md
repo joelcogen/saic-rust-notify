@@ -33,7 +33,9 @@ gateway's `src/status_publisher/vehicle/basic_vehicle_status.py`,
 Unlike the previous stream, a successful direct poll replaces its vehicle snapshot:
 missing data cannot inherit freshness from a newer timestamp. Vehicle state must
 have a recent API timestamp. Charging management has no timestamp and uses receipt
-age. Failures leave cached values visible but disconnected. Optional VIN selection
+age. Failures leave cached values visible but stale. Reauthentication restores session
+and request readiness independently of telemetry; failed readings remain stale
+until a successful refresh. Optional VIN selection
 is verified against account discovery before polling or accepting controls.
 
 Offline tests use synthetic typed responses and a fake session boundary. Runtime

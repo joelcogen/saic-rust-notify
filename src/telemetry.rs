@@ -96,6 +96,7 @@ pub enum ControlError {
 
 #[derive(Default)]
 pub struct Telemetry {
+    // Authenticated session with validated account discovery, not fresh telemetry.
     connected: bool,
     failed_sources: BTreeSet<Source>,
     sources: BTreeMap<Source, BTreeMap<String, Reading>>,
@@ -176,7 +177,7 @@ impl Telemetry {
                 readings.insert(key, value.clone());
             }
         }
-        serde_json::json!({"connected": self.connected, "readings": readings, "sources": sources})
+        serde_json::json!({"connected": self.connected, "ready": self.control_base().is_ok(), "readings": readings, "sources": sources})
     }
     pub fn set_connected(&mut self, connected: bool) {
         self.connected = connected;

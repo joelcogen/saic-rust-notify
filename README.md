@@ -119,14 +119,19 @@ are compared in constant time. Responses include no-store, nosniff, no-referrer,
 frame denial and restrictive Content Security Policy headers. Use a trusted TLS
 reverse proxy for access beyond loopback; this listener speaks HTTP.
 
-- `GET /api/status`: connection state and readings with `value`, `retained` and
-  `fresh`, plus isolated `sources`.
+- `GET /api/status`: `connected` means login and account vehicle discovery
+  succeeded; additive `ready` means a single authorized vehicle can accept
+  requests. Neither guarantees telemetry is available or fresh. Existing readings
+  retain `value`, `retained` and `fresh`, plus isolated `sources`.
 - `POST /climate/start`: optional JSON object with only `temperature`. Numbers
   are Celsius; text supports decimal comma, signs and optional °C/°F. Without an
   override, the lower fresh interior/exterior temperature is used; neither fresh
   means 503. This input selects heating behavior, not the A/C target temperature.
 - `POST /refresh`: explicitly read live vehicle and charging state; return 202
-  after the refreshed snapshot is stored, or 503 on failure.
+  after the refreshed snapshot is stored, or 503 on failure. Available immediately
+  after login and single-vehicle discovery, even with empty or stale telemetry and
+  a future saved polling deadline. It uses the normal refresh scheduling path,
+  preserving known parking age. Login, status and widget reads do not poll the car.
 - `POST /locate`: flash lights only, never sound the horn; return 200 after API
   completion. Completion does not prove the physical vehicle action occurred.
 
@@ -142,7 +147,9 @@ Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encodi
 malformed JSON, unknown keys and bodies on status/refresh/locate return 400.
 Authentication failures return 401; unknown routes (including dashboard assets)
 return 404. Unavailability, rejection, partial failure and uncertain outcomes
-return 503 with redacted messages. Client operations have a 30-second deadline;
+return 503 with redacted messages. Unavailable session/discovery, ambiguous
+vehicle selection and missing fresh climate temperature have distinct errors.
+Client operations have a 30-second deadline;
 the HTTP control wait is bounded to 360 seconds. Cancelled queued requests are
 skipped. An already submitted sequence may finish after the HTTP caller leaves.
 

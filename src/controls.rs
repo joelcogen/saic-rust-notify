@@ -1,5 +1,5 @@
 use crate::{
-    telemetry::{SharedTelemetry, Source},
+    telemetry::{ControlError, SharedTelemetry, Source},
     vehicle::{Action, Request},
 };
 use chrono::Utc;
@@ -52,7 +52,11 @@ impl Controls {
         let state = self.state.read().await;
         let vin = state
             .control_base()
-            .map_err(|_| "SAIC unavailable or a single vehicle is not known")?
+            .map_err(|error| match error {
+                ControlError::Disconnected => "SAIC session or vehicle discovery unavailable",
+                ControlError::SingleVehicleRequired => "A single authorized vehicle is required",
+                ControlError::DiscoveryIncomplete => "Vehicle discovery incomplete",
+            })?
             .to_owned();
         let temperature = if path == "/climate/start" && temperature.is_none() {
             let source = Source::Vehicle(vin.clone());
