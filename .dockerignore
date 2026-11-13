@@ -1,6 +1,11 @@
 **
-!Cargo.toml
-!Cargo.lock
-!src/
-!src/**
 !Dockerfile
+!saic-rust-notify/
+!saic-rust-notify/Cargo.toml
+!saic-rust-notify/Cargo.lock
+!saic-rust-notify/src/
+!saic-rust-notify/src/**
+!saic-rust-client/
+!saic-rust-client/Cargo.toml
+!saic-rust-client/src/
+!saic-rust-client/src/**

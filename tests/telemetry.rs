@@ -13,29 +13,24 @@ fn config(values: &[(&str, &str)]) -> Result<Config, String> {
 #[test]
 fn environment_defaults_and_validation_do_not_expose_values() {
     let base = [
-        ("MQTT_USERNAME", "test-user"),
-        ("MQTT_PASSWORD", "synthetic-secret"),
+        ("SAIC_USERNAME", "test-user"),
+        ("SAIC_PASSWORD", "synthetic-secret"),
     ];
     let c = config(&base).unwrap();
     assert_eq!(c.http_host, "127.0.0.1");
     assert_eq!(c.http_port, 8080);
     assert!(c.api_token.is_none());
-    assert_eq!(c.host, "localhost");
-    assert_eq!(c.port, 1883);
     assert_eq!(c.stale_after, Duration::from_secs(600));
-    assert_eq!(c.stale_check, Duration::from_secs(30));
-    assert!(config(&[]).unwrap_err_safe().contains("MQTT_USERNAME"));
+    assert_eq!(c.poll_interval, Duration::from_secs(300));
+    assert!(config(&[]).unwrap_err_safe().contains("SAIC_USERNAME"));
     for (key, value) in [
         ("HTTP_PORT", "65536"),
         ("HTTP_PORT", "0"),
         ("HTTP_HOST", " "),
-        ("MQTT_PORT", "65536"),
-        ("MQTT_PORT", "0"),
-        ("MQTT_PORT", "secret-invalid"),
         ("STALE_AFTER_SECONDS", "-1"),
-        ("STALE_CHECK_SECONDS", "0"),
-        ("MQTT_ACCOUNT", "a/+"),
-        ("MQTT_HOST", " "),
+        ("POLL_INTERVAL_SECONDS", "0"),
+        ("SAIC_VIN", "a/+"),
+        ("SAIC_VIN", " "),
         ("LOG_LEVEL", "secret-invalid"),
     ] {
         let mut values = base.to_vec();
@@ -46,12 +41,12 @@ fn environment_defaults_and_validation_do_not_expose_values() {
     }
     assert_eq!(
         config(&[
-            ("MQTT_USERNAME", "u"),
-            ("MQTT_PASSWORD", "p"),
-            ("MQTT_ACCOUNT", "fleet")
+            ("SAIC_USERNAME", "u"),
+            ("SAIC_PASSWORD", "p"),
+            ("SAIC_VIN", "fleet")
         ])
         .unwrap()
-        .account
+        .vin
         .as_deref(),
         Some("fleet")
     );

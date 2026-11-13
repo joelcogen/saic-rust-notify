@@ -1,5 +1,5 @@
 #!/bin/sh
-# Offline smoke check: only synthetic settings; never connects to a real broker.
+# Offline smoke check: only synthetic settings; never connects to SAIC production.
 set -eu
 image=${1:-saic-rust-notify:local}
 container_name=saic-rust-notify-smoke-$$
@@ -7,8 +7,8 @@ cleanup() { docker rm -f "$container_name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT HUP INT TERM
 docker run -d --name "$container_name" \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
-  -e MQTT_HOST=127.0.0.1 -e MQTT_PORT=9 \
-  -e MQTT_USERNAME=synthetic -e MQTT_PASSWORD=synthetic \
+  -e SAIC_BASE_URL=https://127.0.0.1:9/ \
+  -e SAIC_USERNAME=synthetic -e SAIC_PASSWORD=synthetic \
   -e CLIMATE_API_TOKEN=synthetic-smoke-token \
   -p 127.0.0.1::8080 "$image" >/dev/null
 port=$(docker port "$container_name" 8080/tcp)

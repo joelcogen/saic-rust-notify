@@ -1,4 +1,4 @@
-use saic_rust_notify::{config::Config, mqtt, telemetry::Telemetry};
+use saic_rust_notify::{config::Config, telemetry::Telemetry, vehicle};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{filter::Targets, prelude::*};
@@ -12,7 +12,14 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    // Only our own fixed messages are logged, even at TRACE. MQTT dependency
+    let client = match vehicle::client(&config) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("Configuration error: {error}");
+            std::process::exit(2);
+        }
+    };
+    // Only our own fixed messages are logged, even at TRACE. HTTP dependency
     // diagnostics can expose credentials and payloads.
     tracing_subscriber::registry()
         .with(
@@ -40,7 +47,7 @@ async fn main() {
     );
     tokio::select! {
         _ = notifications => {},
-        _ = mqtt::run_with_controls(config, state.clone(), commands, controls.results.clone(), shutdown()) => {},
+        _ = vehicle::run(client, config, state.clone(), commands, shutdown()) => {},
         result = axum::serve(listener, app) => {
             if result.is_err() { tracing::error!("HTTP server stopped unexpectedly"); }
         }

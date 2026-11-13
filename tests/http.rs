@@ -4,9 +4,10 @@ use axum::{
     Router,
 };
 use saic_rust_notify::{
-    controls::{climate_plan, parse_temperature, Controls, Publish, ResultMessage},
+    controls::{climate_plan, parse_temperature, Controls},
     http::router,
     telemetry::{decode, Telemetry},
+    vehicle::{Action, Request as VehicleRequest},
 };
 use serde_json::{json, Value};
 use std::{
@@ -16,7 +17,7 @@ use std::{
 use tokio::sync::{mpsc, RwLock};
 use tower::ServiceExt;
 const BASE: &str = "saic/test/vehicles/CAR";
-async fn setup() -> (Controls, mpsc::Receiver<Publish>) {
+async fn setup() -> (Controls, mpsc::Receiver<VehicleRequest>) {
     let state = Arc::new(RwLock::new(Telemetry::default()));
     state.write().await.set_connected(true);
     state
@@ -211,282 +212,83 @@ fn temperatures_and_thresholds() {
     ] {
         assert!(parse_temperature(&raw).is_err());
     }
-    for (t, count, first) in [
-        (4., 5, "frontWindowDefrosterHeating"),
-        (4.01, 4, "remoteClimateState"),
-        (6., 4, "remoteClimateState"),
-        (6.01, 1, "remoteClimateState"),
-    ] {
-        let (commands, _) = climate_plan(t);
-        assert_eq!(commands.len(), count);
-        assert_eq!(commands[0]["topic"], format!("climate/{first}/set"));
-        if count > 1 {
-            assert_eq!(
-                commands[1],
-                json!({"topic":"climate/heatedSeatsFrontLeftLevel/set","payload":"3"})
-            );
-            assert_eq!(
-                commands[2],
-                json!({"topic":"climate/heatedSeatsFrontRightLevel/set","payload":"3"})
-            );
-            assert_eq!(
-                commands[3],
-                json!({"topic":"climate/steeringWheelHeating/set","payload":"on"})
-            );
-        }
-        if count == 5 {
-            assert_eq!(
-                commands[4]["topic"],
-                "climate/rearWindowDefrosterHeating/set"
-            );
-        }
+    for (t, count) in [(4., 5), (4.01, 4), (6., 4), (6.01, 1)] {
+        assert_eq!(climate_plan(t).0.len(), count);
     }
 }
-fn deliver(c: &Controls, topic: &str, value: Value, retained: bool) {
-    let _ = c.results.send(ResultMessage {
-        topic: topic.into(),
-        value,
-        retained,
-    });
-}
-fn success(payload: &Value) -> Value {
-    json!({"requestId":payload["requestId"],"status":"success","results":payload["commands"].as_array().unwrap().iter().map(|c| json!({"topic":c["topic"],"status":"success"})).collect::<Vec<_>>()})
-}
+
 #[tokio::test]
-async fn climate_success_requires_ack_and_exact_matching_result() {
+async fn controls_wait_for_completion_and_notify_only_on_full_success() {
     let (c, mut rx) = setup().await;
-    let mut previous = Value::Null;
-    for _ in 0..2 {
-        c.preheating.send_replace(None);
-        let task = tokio::spawn(call(
-            router(c.clone(), Some("test-secret")),
-            "POST",
-            "/climate/start",
-            r#"{"temperature":"35.6 °F"}"#,
-            Some("Bearer test-secret"),
-            None,
-        ));
-        let publish = rx.recv().await.unwrap();
-        assert_eq!(publish.topic, format!("{BASE}/commands/batch/set"));
-        let payload: Value = serde_json::from_str(&publish.payload).unwrap();
-        assert_ne!(payload["requestId"], previous);
-        previous = payload["requestId"].clone();
-        assert_eq!(payload["commands"], json!(climate_plan(2.).0));
-        let result = success(&payload);
-        let topic = format!("{BASE}/commands/batch/result");
-        deliver(&c, &topic, result.clone(), true);
-        deliver(
-            &c,
-            &topic,
-            json!({"requestId":"other","status":"success"}),
-            false,
-        );
-        deliver(
-            &c,
-            "saic/test/vehicles/OTHER/commands/batch/result",
-            result.clone(),
-            false,
-        );
-        tokio::task::yield_now().await;
-        assert!(!task.is_finished());
-        assert!(c.preheating.borrow().is_none());
-        deliver(&c, &topic, result, false);
-        tokio::task::yield_now().await;
-        assert!(!task.is_finished(), "result alone must not replace PUBACK");
-        publish.ack.send(()).unwrap();
-        assert_eq!(
-            task.await.unwrap(),
-            (200, "Heating up and defrosting".into())
-        );
-        assert!(c.preheating.borrow().is_some());
-    }
-}
-#[tokio::test(start_paused = true)]
-async fn failures_timeouts_and_mutual_exclusion() {
     for outcome in [
-        "partial",
-        "rejected",
-        "unknown",
-        "timeout",
-        "disconnect",
-        "ack-timeout",
+        Ok("Heating up"),
+        Err("Climate partial failure"),
+        Err(saic_rust_notify::controls::UNKNOWN),
     ] {
-        let (c, mut rx) = setup().await;
-        let task = tokio::spawn(call(
-            router(c.clone(), Some("test-secret")),
-            "POST",
-            "/climate/start",
-            "",
-            Some("Bearer test-secret"),
-            None,
-        ));
-        let publish = rx.recv().await.unwrap();
+        c.preheating.send_replace(None);
+        let caller = c.clone();
+        let task = tokio::spawn(async move { caller.execute("/climate/start", None).await });
+        let request = rx.recv().await.unwrap();
+        assert_eq!(request.vin, BASE);
+        assert!(matches!(request.action, Action::Climate(5.)));
+        assert!(c.preheating.borrow().is_none());
+        assert!(!task.is_finished());
         assert!(c
             .execute("/locate", None)
             .await
             .unwrap_err()
             .contains("in progress"));
-        assert!(c
-            .execute("/climate/start", Some(2.))
-            .await
-            .unwrap_err()
-            .contains("in progress"));
-        let payload: Value = serde_json::from_str(&publish.payload).unwrap();
-        if outcome != "ack-timeout" {
-            publish.ack.send(()).unwrap();
-        } else {
-            tokio::time::advance(Duration::from_secs(6)).await;
-        }
-        let mut result = success(&payload);
-        match outcome {
-            "partial" => result["results"][1]["status"] = json!("failed"),
-            "rejected" => result["results"] = json!([]),
-            "unknown" => result["results"][0]["status"] = json!("unknown"),
-            "disconnect" => c.state.write().await.set_connected(false),
-            _ => {}
-        }
-        if matches!(outcome, "partial" | "rejected" | "unknown") {
-            deliver(&c, &format!("{BASE}/commands/batch/result"), result, false);
-        }
-        let (status, body) = task.await.unwrap();
-        assert_eq!(status, 503);
-        assert!(body.contains("earlier commands may have succeeded"));
-        assert!(
-            body.contains(
-                if matches!(outcome, "timeout" | "disconnect" | "ack-timeout") {
-                    "unknown"
-                } else {
-                    outcome
-                }
-            ),
-            "{body}"
-        );
-        assert!(c.preheating.borrow().is_none());
+        request.reply.send(outcome).unwrap();
+        assert_eq!(task.await.unwrap(), outcome);
+        assert_eq!(c.preheating.borrow().is_some(), outcome.is_ok());
         assert!(rx.try_recv().is_err());
     }
 }
-#[tokio::test(start_paused = true)]
-async fn refresh_and_lights_only_locate() {
-    for (path, suffix, payload, code) in [
-        ("/refresh", "refresh/mode/set", "force", 202),
-        ("/locate", "location/findMyCar/set", "lights_only", 200),
-    ] {
-        for outcome in ["success", "rejected", "timeout", "ack-timeout"] {
-            let (c, mut rx) = setup().await;
-            let task = tokio::spawn(call(
-                router(c.clone(), Some("test-secret")),
-                "POST",
-                path,
-                "",
-                Some("Bearer test-secret"),
-                None,
-            ));
-            let p = rx.recv().await.unwrap();
-            assert_eq!(p.topic, format!("{BASE}/{suffix}"));
-            assert_eq!(p.payload, payload);
-            if path == "/locate" {
-                assert!(c.execute("/climate/start", Some(2.)).await.is_err());
-            }
-            if outcome == "ack-timeout" {
-                tokio::time::advance(Duration::from_secs(6)).await;
-            } else {
-                p.ack.send(()).unwrap();
-            }
-            if path == "/locate" && matches!(outcome, "success" | "rejected") {
-                deliver(
-                    &c,
-                    &format!("{BASE}/location/findMyCar/result"),
-                    json!("Success"),
-                    true,
-                );
-                deliver(
-                    &c,
-                    &format!("{BASE}/location/findMyCar/result"),
-                    json!(if outcome == "success" {
-                        "Success"
-                    } else {
-                        "Failed"
-                    }),
-                    false,
-                );
-            }
-            let (status, _) = task.await.unwrap();
-            assert_eq!(
-                status,
-                if outcome == "ack-timeout" || (path == "/locate" && outcome != "success") {
-                    503
-                } else {
-                    code
-                }
-            );
-            assert!(c.preheating.borrow().is_none());
-        }
-    }
-}
+
 #[tokio::test]
-async fn status_freshness_and_temperature_selection() {
+async fn refresh_locate_and_temperature_selection() {
     let (c, mut rx) = setup().await;
-    let now = Instant::now();
-    {
-        let mut s = c.state.write().await;
-        s.ingest(
-            decode(&format!("{BASE}/climate/exteriorTemperature"), b"2", None)
+    for (path, expected) in [("/refresh", 202), ("/locate", 200), ("/climate/start", 200)] {
+        let task = tokio::spawn(call(
+            router(c.clone(), Some("test-secret")),
+            "POST",
+            path,
+            "",
+            Some("Bearer test-secret"),
+            None,
+        ));
+        let request = rx.recv().await.unwrap();
+        assert!(matches!(
+            (path, request.action),
+            ("/refresh", Action::Refresh)
+                | ("/locate", Action::Locate)
+                | ("/climate/start", Action::Climate(5.))
+        ));
+        request.reply.send(Ok("done")).unwrap();
+        assert_eq!(task.await.unwrap().0, expected);
+    }
+    c.state
+        .write()
+        .await
+        .ingest(
+            decode(&format!("{BASE}/climate/exteriorTemperature"), b"-20", None)
                 .unwrap()
                 .unwrap(),
             false,
-            now,
+            Instant::now() - Duration::from_secs(601),
         )
         .unwrap();
-    }
-    let (code, body) = call(
-        router(c.clone(), Some("test-secret")),
-        "GET",
-        "/api/status",
-        "",
-        Some("Bearer test-secret"),
-        None,
-    )
-    .await;
-    assert_eq!(code, 200);
-    let body: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(body["connected"], true);
-    assert_eq!(
-        body["readings"]["vehicle/climate/exteriorTemperature"],
-        json!({"value":"2","retained":false,"fresh":true})
-    );
-    let cc = c.clone();
-    let task = tokio::spawn(async move { cc.execute("/climate/start", None).await });
-    let p = rx.recv().await.unwrap();
-    let value: Value = serde_json::from_str(&p.payload).unwrap();
-    assert_eq!(value["commands"], json!(climate_plan(2.).0));
-    p.ack.send(()).unwrap();
-    deliver(
-        &c,
-        &format!("{BASE}/commands/batch/result"),
-        success(&value),
-        false,
-    );
+    let caller = c.clone();
+    let task = tokio::spawn(async move { caller.execute("/climate/start", None).await });
+    let request = rx.recv().await.unwrap();
+    assert!(matches!(request.action, Action::Climate(5.)));
+    request.reply.send(Ok("done")).unwrap();
     task.await.unwrap().unwrap();
-    // Both cached retained temperatures are unusable without a fresh gateway timestamp.
-    for side in ["interior", "exterior"] {
-        c.state
-            .write()
-            .await
-            .ingest(
-                decode(&format!("{BASE}/climate/{side}Temperature"), b"-3", None)
-                    .unwrap()
-                    .unwrap(),
-                true,
-                now,
-            )
-            .unwrap();
-    }
-    assert!(c
-        .execute("/climate/start", None)
-        .await
-        .unwrap_err()
-        .contains("temperature"));
     c.state.write().await.set_connected(false);
+    for path in ["/refresh", "/locate", "/climate/start"] {
+        assert!(c.execute(path, Some(2.)).await.is_err());
+    }
+    assert!(rx.try_recv().is_err());
     let (_, body) = call(
         router(c.clone(), Some("test-secret")),
         "GET",
@@ -502,106 +304,21 @@ async fn status_freshness_and_temperature_selection() {
         body["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
         false
     );
-    for path in ["/refresh", "/locate", "/climate/start"] {
-        assert!(c.execute(path, Some(2.)).await.is_err());
-    }
 }
 
-#[tokio::test]
-async fn fresh_temperature_excludes_stale_lower_value_and_status_uses_injected_clock() {
+#[tokio::test(start_paused = true)]
+async fn timed_out_request_is_cancelled_and_ambiguous_vehicles_refuse_controls() {
     let (c, mut rx) = setup().await;
-    let now = Instant::now();
+    let caller = c.clone();
+    let task = tokio::spawn(async move { caller.execute("/locate", None).await });
+    let request = rx.recv().await.unwrap();
+    tokio::time::advance(Duration::from_secs(361)).await;
+    assert!(task.await.unwrap().unwrap_err().contains("unknown"));
+    assert!(request.reply.is_closed());
     c.state
         .write()
         .await
-        .ingest(
-            decode(&format!("{BASE}/climate/exteriorTemperature"), b"-20", None)
-                .unwrap()
-                .unwrap(),
-            false,
-            now - Duration::from_secs(601),
-        )
-        .unwrap();
-    let snapshot = c
-        .state
-        .read()
-        .await
-        .snapshot(now, chrono::Utc::now(), c.ttl);
-    assert_eq!(
-        snapshot["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
-        true
-    );
-    assert_eq!(
-        snapshot["readings"]["vehicle/climate/exteriorTemperature"]["fresh"],
-        false
-    );
-    let cc = c.clone();
-    let task = tokio::spawn(async move { cc.execute("/climate/start", None).await });
-    let p = rx.recv().await.unwrap();
-    let payload: Value = serde_json::from_str(&p.payload).unwrap();
-    assert_eq!(payload["commands"], json!(climate_plan(5.).0));
-    p.ack.send(()).unwrap();
-    deliver(
-        &c,
-        &format!("{BASE}/commands/batch/result"),
-        success(&payload),
-        false,
-    );
-    task.await.unwrap().unwrap();
-    let snapshot =
-        c.state
-            .read()
-            .await
-            .snapshot(now + Duration::from_secs(601), chrono::Utc::now(), c.ttl);
-    assert_eq!(
-        snapshot["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
-        false
-    );
-}
-
-#[tokio::test]
-async fn status_preserves_unique_keys_and_isolates_multiple_vehicles() {
-    let (c, _) = setup().await;
-    let mut state = c.state.write().await;
-    let now = Instant::now();
-    state
-        .ingest(
-            decode("saic/test/status", b"online", None)
-                .unwrap()
-                .unwrap(),
-            false,
-            now,
-        )
-        .unwrap();
-    let snapshot = state.snapshot(now, chrono::Utc::now(), c.ttl);
-    assert_eq!(snapshot["readings"]["account/status"]["value"], "online");
-    assert_eq!(
-        snapshot["readings"]["vehicle/climate/interiorTemperature"]["value"],
-        "5"
-    );
-    state
-        .ingest(
-            decode(
-                "saic/test/vehicles/OTHER/climate/interiorTemperature",
-                b"20",
-                None,
-            )
-            .unwrap()
-            .unwrap(),
-            true,
-            now,
-        )
-        .unwrap();
-    let snapshot = state.snapshot(now, chrono::Utc::now(), c.ttl);
-    assert_eq!(
-        snapshot["readings"]["saic/test/vehicles/CAR/vehicle/climate/interiorTemperature"]["value"],
-        "5"
-    );
-    assert_eq!(
-        snapshot["readings"]["saic/test/vehicles/OTHER/vehicle/climate/interiorTemperature"]
-            ["value"],
-        "20"
-    );
-    drop(state);
-    assert!(c.execute("/refresh", None).await.is_err());
+        .select_vehicles(&[BASE.into(), "OTHER".into()]);
+    assert!(c.execute("/locate", None).await.is_err());
+    assert!(rx.try_recv().is_err());
 }

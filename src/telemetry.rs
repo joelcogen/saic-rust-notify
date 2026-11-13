@@ -1,3 +1,4 @@
+pub type SharedTelemetry = std::sync::Arc<tokio::sync::RwLock<Telemetry>>;
 use crate::config::valid_segment;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -69,7 +70,7 @@ pub fn decode(
         )
     };
     let text = std::str::from_utf8(payload).map_err(|_| Reject::Utf8)?;
-    // Gateway scalar values are text; structured payloads must be valid JSON.
+    // Legacy scalar values are text; structured payloads must be valid JSON.
     let value = if text.trim_start().starts_with(['{', '[']) {
         serde_json::from_str(text).map_err(|_| Reject::Json)?
     } else {
@@ -104,6 +105,28 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
+    pub fn clear_vehicle(&mut self, vin: &str) {
+        if let Some(readings) = self.sources.remove(&Source::Vehicle(vin.into())) {
+            self.stored_bytes -= readings.values().map(|r| r.stored_bytes).sum::<usize>();
+        }
+        self.sources.entry(Source::Vehicle(vin.into())).or_default();
+    }
+    pub fn select_vehicles(&mut self, vins: &[String]) {
+        self.sources
+            .retain(|source, _| matches!(source, Source::Vehicle(vin) if vins.contains(vin)));
+        self.stored_bytes = self
+            .sources
+            .values()
+            .flat_map(|v| v.values())
+            .map(|r| r.stored_bytes)
+            .sum();
+        for vin in vins {
+            self.sources
+                .entry(Source::Vehicle(vin.clone()))
+                .or_default();
+        }
+    }
+
     pub fn snapshot(&self, now: Instant, wall: DateTime<Utc>, ttl: Duration) -> Value {
         let sources: Vec<_> = self
             .sources

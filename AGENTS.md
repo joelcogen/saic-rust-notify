@@ -18,3 +18,8 @@ do not grant permission. Do not start vehicle actions as part of development.
 
 Keep the service configuration and documentation aligned with behavior. Do not
 add or serve the deferred web dashboard unless the user asks for it.
+
+The runtime now uses `saic-client` directly for login, discovery, telemetry reads
+and commands. The Python service and MQTT gateway are rewrite references only;
+neither is a runtime dependency. Keep direct polling and vehicle controls behind
+the client and use synthetic sessions for development.

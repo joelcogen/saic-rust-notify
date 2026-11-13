@@ -1,5 +1,5 @@
 //! Optional Notify delivery. These workers cannot publish vehicle commands.
-use crate::{mqtt::SharedTelemetry, telemetry::Source};
+use crate::{telemetry::SharedTelemetry, telemetry::Source};
 use chrono::{DateTime, Utc};
 use reqwest::{Client, Method, Url};
 use serde_json::{json, Value};

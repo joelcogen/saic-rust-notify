@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    controls::{Controls, ResultMessage},
+    controls::Controls,
     telemetry::{decode, Telemetry},
 };
 use axum::{
@@ -475,10 +475,8 @@ async fn notification_failure_cannot_change_climate_success_or_replay_commands()
     let caller = controls.clone();
     let command = tokio::spawn(async move { caller.execute("/climate/start", Some(20.)).await });
     let publish = publishes.recv().await.unwrap();
-    let batch: Value = serde_json::from_str(&publish.payload).unwrap();
     assert!(starts.borrow().is_none());
-    publish.ack.send(()).unwrap();
-    controls.results.send(ResultMessage {topic:"saic/test/vehicles/CAR/commands/batch/result".into(),retained:false,value:json!({"requestId":batch["requestId"],"status":"success","results":[{"topic":"climate/remoteClimateState/set","status":"success"}]})}).ok().unwrap();
+    publish.reply.send(Ok("Heating up")).unwrap();
     assert!(command.await.unwrap().is_ok());
     let start = starts.borrow().unwrap();
     let mut worker = Activity::new(true, start);

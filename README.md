@@ -1,141 +1,113 @@
 # SAIC Rust Notify
 
-SAIC Rust Notify connects vehicle data and controls to MQTT and Notify! widgets
-and Live Activities. Its goal is to provide a small, self-hosted service for
-viewing useful vehicle information and requesting selected vehicle actions,
-with configuration supplied through environment variables.
+A self-hosted Rust service that reads vehicle telemetry and sends vehicle controls
+directly through the local [`saic-client`](../saic-rust-client) crate. It serves an
+authenticated HTTP API and optional Notify! widgets and Live Activities. No other
+local service is required. The web dashboard remains deferred.
 
-The service is intended to work with the SAIC MQTT Gateway and an MQTT broker.
-Notify! integrations are optional. The web dashboard is outside the project's
-scope for now.
+## Run and configure
 
-The SAIC Rust client lives in [`../saic-rust-client`](../saic-rust-client) and
-provides SAIC API and vehicle operations. See its documentation for supported
-operations and development guidance.
-
-## MQTT consumer
-
-The executable subscribes to `saic/#` with QoS 0 over plain MQTT/TCP and
-serves authenticated HTTP status and vehicle controls. Commands use the gateway's
-MQTT protocol; no SAIC API functionality is duplicated from `saic-client`.
-Optional Notify! workers push a dashboard widget and charging/preheating Live
-Activities. No web dashboard or HTML/CSS/JavaScript assets are served.
-
-Run with Rust/Cargo and process environment variables (the service does not read
-`.env` files):
+Check out `saic-rust-client` alongside this repository, then:
 
 ```sh
 cargo build --locked --release
-# Supply the settings below through your service manager or shell environment.
 ./target/release/saic-rust-notify
 ```
 
+The executable reads `.env` from its current directory only. Process environment
+variables take precedence, including empty values. Keep credentials in the ignored
+`.env` or `runtime.env`, never in source control. Configuration errors identify
+settings without printing values; logs exclude credentials, vehicle identifiers,
+API responses and dependency diagnostics, including at TRACE.
+
 | Variable | Default / requirement |
 | --- | --- |
+| `SAIC_USERNAME` | Required, nonempty SAIC email account |
+| `SAIC_PASSWORD` | Required, nonempty SAIC password |
+| `SAIC_VIN` | Optional vehicle selection; must belong to the authenticated account |
+| `SAIC_BASE_URL` | Optional HTTPS API root override; defaults to the client's MG Europe profile |
+| `POLL_INTERVAL_SECONDS` | `300`, positive integer up to 4294967295 |
+| `STALE_AFTER_SECONDS` | `600`, positive integer up to 4294967295 |
 | `HTTP_HOST` | `127.0.0.1`; bind interface for HTTP |
 | `HTTP_PORT` | `8080`, integer 1–65535 |
 | `CLIMATE_API_TOKEN` | Bearer token; unset/empty rejects every HTTP request |
-| `MQTT_HOST` | `localhost` |
-| `MQTT_PORT` | `1883`, integer 1–65535 |
-| `MQTT_USERNAME` | Required, nonempty broker username |
-| `MQTT_PASSWORD` | Required, nonempty broker password |
-| `MQTT_CLIENT_ID` | `saic-telemetry-consumer`; must differ from the gateway's ID |
-| `MQTT_ACCOUNT` | Optional account topic segment; unset/empty accepts all accounts |
-| `STALE_AFTER_SECONDS` | `600`, positive integer up to 4294967295 |
-| `STALE_CHECK_SECONDS` | `30`, positive integer up to 4294967295 |
-| `NOTIFY_DASHBOARD_URL` | Optional Notify dashboard widget push URL; unset/empty disables it |
+| `NOTIFY_DASHBOARD_URL` | Optional Notify widget push URL; unset/empty disables it |
 | `NOTIFY_ACTIVITY_URL` | Optional Notify device Live Activity URL; unset/empty disables both activities |
 | `LOG_LEVEL` | `INFO`; ERROR, WARN/WARNING, INFO, DEBUG, TRACE supported |
 
-Use the same broker as the SAIC MQTT Gateway with its default `saic` prefix.
-The gateway's `MQTT_USER` corresponds to this service's `MQTT_USERNAME`.
-`MQTT_ACCOUNT` filters topics, not authentication. Keep secrets in ignored
-`runtime.env` or your service manager. Configuration errors name the setting
-without printing its value. Logs exclude accounts, vehicle identifiers, payloads,
-broker credentials and dependency diagnostics, including at TRACE.
+Starting the service logs in, discovers account vehicles, then polls live vehicle
+status and charging management data. **Live polling can wake the vehicle.** Login
+or discovery failures retry after 60 seconds. Operation failures mark the cached
+state disconnected, wait one polling interval, then authenticate and discover
+again. HTTP and notification workers remain available during retry waits.
+SIGINT/SIGTERM stop the service and cancel pending network requests.
 
-Connection failures retry with delays from 1 to 60 seconds. Every connection
-subscribes again; state becomes connected only after subscription acceptance.
-SIGINT/SIGTERM stop the consumer. Cached state survives reconnects but not process
-restarts. Controls can obtain a base only while connected with exactly one
-discovered vehicle, including across accounts. Commands are refused when discovery is incomplete or ambiguous.
+Without `SAIC_VIN`, all discovered vehicles are polled independently (maximum 128).
+Controls and notifications require exactly one discovered vehicle. An explicit
+VIN selects only that vehicle after verifying account membership. Invalid or
+incomplete discovery fails closed. No controls run during discovery or polling.
 
-### State and freshness
+### Telemetry and freshness
 
-`saic/<account>/vehicles/<id>/<path>` maps to `vehicle/<path>` (or `vehicle/root`
-for the vehicle base); other account topics map to `account/<path>`. State is
-isolated per account/vehicle to prevent one vehicle's timestamps or values from
-overwriting another's. Each reading stores its value, retained flag and monotonic
-receipt time under a shared read/write lock. Scalar payloads remain strings;
-objects and arrays decode as JSON. Invalid UTF-8, JSON and topic shapes are
-rejected without changing state. Account filtering happens before payload parsing.
+`GET /api/status` preserves the `vehicle/...` reading keys used by Notify!, such
+as `vehicle/climate/interiorTemperature`. Each source is a VIN; multiple vehicles
+remain isolated. Ambiguous flattened keys are prefixed with their source.
+Snapshots are in memory and are lost at restart.
 
-Freshness follows the Python consumer:
+Vehicle readings use the API's UTC `statusTime`: old, future or absent timestamps
+cannot certify freshness. Their `retained` flag is true to indicate that the API
+may return an older observation. Charging management has no source timestamp;
+its readings use monotonic receipt age and `retained=false`. Disconnected readings
+are never fresh. Freshness thresholds are inclusive. Failed polls preserve the
+last snapshot as stale; successful polls replace it so missing fields cannot be
+revived by a new timestamp. Missing, invalid and unknown measurements are omitted,
+not interpreted as zero or off.
 
-- SoC, target SoC, charging, power, remaining charging time and charger connection
-  use `refresh/lastChargeState`; other vehicle readings use `refresh/lastVehicleState`.
-- A timezone-qualified gateway timestamp between now and the freshness threshold
-  permits retained values. Future or old timestamps do not certify freshness.
-- Otherwise a non-retained reading can be fresh by monotonic receipt age. A
-  parseable timestamp without a timezone explicitly prevents this fallback,
-  matching the reference. Missing/invalid timestamps allow the receipt fallback.
-- Disconnected readings are never returned as fresh. Cached values remain available
-  separately. Freshness thresholds are inclusive; stale-traffic warnings start
-  at the threshold. Retained or account traffic counts as received traffic but
-  does not by itself certify vehicle readings as fresh.
-
-While connected, a periodic check logs one stale warning until accepted traffic
-resumes, then logs a resume message. This traffic check is separate from per-field
-freshness. On startup, the first check warns if no matching messages have arrived.
-
-Resource limits are 256 KiB per payload, 4096 bytes per topic, 128 sources, 4096
-stored readings and 16 MiB of serialized values/keys (in-memory JSON overhead is
-additional). Excess messages are rejected; existing entries remain. A state
-capacity rejection disables control-base validation until restart, so incomplete
-discovery cannot accidentally authorize a single-vehicle control.
+The adapter maps temperatures, cabin climate, seat/rear-window heating, door lock,
+running state, SOC/target, charging/plug state, battery power and remaining charging
+time to the existing Notify fields. Protocol scaling is converted to Celsius,
+percent, kW and seconds. API transport, authentication, command payloads and event
+continuation are owned by `saic-client`.
 
 ## HTTP API
 
 All requests require `Authorization: Bearer <CLIMATE_API_TOKEN>`. Token digests
-are compared in constant time. Responses carry `Cache-Control: no-store`,
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, frame denial and
-a restrictive Content Security Policy. Use a trusted TLS reverse proxy for
-access beyond loopback; this listener speaks HTTP.
+are compared in constant time. Responses include no-store, nosniff, no-referrer,
+frame denial and restrictive Content Security Policy headers. Use a trusted TLS
+reverse proxy for access beyond loopback; this listener speaks HTTP.
 
-- `GET /api/status`: connection state and readings with `value`, `retained`, and
-  `fresh`. `sources` preserves account/vehicle isolation; ambiguous `readings` keys
-  are prefixed with their source to avoid collisions. Unique keys retain the
-  Python format, such as `vehicle/climate/interiorTemperature`.
+- `GET /api/status`: connection state and readings with `value`, `retained` and
+  `fresh`, plus isolated `sources`.
 - `POST /climate/start`: optional JSON object with only `temperature`. Numbers
-  are Celsius; text supports decimal comma, signs and optional °C/°F (also º,
-  plain C/F and Shortcuts whitespace). Booleans, null and nonfinite values fail.
-  Without an override, use the lower valid fresh interior/exterior temperature;
-  fail with 503 if neither is fresh.
-- `POST /refresh`: publish `refresh/mode/set=force`, return 202 after PUBACK.
-- `POST /locate`: publish `location/findMyCar/set=lights_only`, never horn;
-  return 200 only after PUBACK and a new non-retained `Success` result.
+  are Celsius; text supports decimal comma, signs and optional °C/°F. Without an
+  override, the lower fresh interior/exterior temperature is used; neither fresh
+  means 503. This input selects heating behavior, not the A/C target temperature.
+- `POST /refresh`: explicitly read live vehicle and charging state; return 202
+  after the refreshed snapshot is stored, or 503 on failure.
+- `POST /locate`: flash lights only, never sound the horn; return 200 after API
+  completion. Completion does not prove the physical vehicle action occurred.
+
+Climate starts front defrost at <=4°C, otherwise A/C at 22°C using the client's
+standard temperature profile. At <=6°C it then heats left seat, right seat and
+steering wheel; at <=4°C it finally starts rear defrost. Each operation uses a
+client command builder and waits for completion before the next. The two seats
+are always independent commands. There are no status reads between commands.
+The normal polling interval resumes after a control; an explicit `/refresh` can
+request an earlier update. Controls are mutually exclusive.
 
 Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
 malformed JSON, unknown keys and bodies on status/refresh/locate return 400.
 Authentication failures return 401; unknown routes (including dashboard assets)
-return 404. Vehicle unavailability, rejection, partial failure and unknown
-outcomes return 503 with distinct messages. Raw gateway errors are not exposed.
+return 404. Unavailability, rejection, partial failure and uncertain outcomes
+return 503 with redacted messages. Client operations have a 30-second deadline;
+the HTTP control wait is bounded to 360 seconds. Cancelled queued requests are
+skipped. An already submitted sequence may finish after the HTTP caller leaves.
 
-Climate starts front defrost at <=4°C, otherwise normal remote climate. At <=6°C
-it then heats left seat, right seat and steering wheel; at <=4°C it finally starts
-rear defrost. These ordered commands are sent in one non-retained QoS 1 batch
-with a unique UUID requestId. Success requires PUBACK within five seconds and a
-matching non-retained result with the complete ordered success list within 360
-seconds. Locate waits up to 45 seconds for its result; its gateway protocol has
-no request ID, so avoid concurrent external locate callers. Climate and locate
-are mutually exclusive within this service. Refresh also requires PUBACK within
-five seconds. Disconnects and missing acknowledgments/results are unknown
-outcomes: earlier commands may have succeeded; check the vehicle before retrying.
-Commands are never automatically replayed across reconnection.
-
-An in-process `Controls::preheating` watch signal starts only after acknowledged
-full climate success. Notify delivery runs independently: failed or uncertain
-notification creation does not change command success or repeat vehicle commands.
+Commands are never automatically replayed. A failed sequence stops immediately;
+earlier commands may have succeeded. Check vehicle state before retrying an
+unknown or partial outcome. Only full climate success starts the preheating
+notification signal. Notify failures cannot change command success or repeat
+vehicle commands.
 
 ## Optional Notify! integration
 
@@ -183,62 +155,34 @@ commands to recover a notification.
 
 ## Container deployment
 
-Build from this repository (no parent-directory build context is required):
+The build helper stages only Cargo manifests and Rust source from this repository
+and the sibling Rust client, excluding credentials and other local files. The
+staged build context also uses an allowlist. Run the helper from this checkout;
+a bare `docker build .` does not contain the required sibling source.
 
 ```sh
-docker build -t saic-rust-notify:local .
+./scripts/build-container.sh saic-rust-notify:local
 docker run --rm --name saic-rust-notify \
-  --env-file runtime.env \
+  --env-file .env \
   --publish 127.0.0.1:8080:8080 \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   saic-rust-notify:local
 ```
 
-Create `runtime.env` locally with your own values for `MQTT_HOST`,
-`MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_ACCOUNT` and `CLIMATE_API_TOKEN`, plus
-optional Notify URLs. Docker explicitly loads this file; the executable never
-loads it or any `.env` file implicitly. The build context allowlist excludes
-credentials, tests, dashboard assets and unrelated files. The final Debian image
-contains only the compiled Rust service and base runtime libraries, runs as
-UID/GID 10001, and contains no Python runtime or dependencies. HTTP binds to
-`0.0.0.0:8080` inside the container; native execution defaults to loopback.
-SIGTERM stops the service and cancels notification requests.
-
-On a Docker network, use the broker service name as `MQTT_HOST`; `localhost`
-inside a container refers to that container. Configure the SAIC MQTT Gateway
-separately with the same broker, credentials and `saic` topic prefix. Its
-`MQTT_USER` maps to this service's `MQTT_USERNAME`; each process needs a distinct
-client ID. Configure `MQTT_ACCOUNT` to the gateway's account topic segment.
-Climate requires a gateway version supporting `commands/batch/set` and matching
-ordered results; an older gateway can time out after an unknown outcome. This
-service does not log in to SAIC itself and needs no SAIC account password.
-
-MQTT is plain TCP: use a private network and broker ACLs restricting this service
-to the intended account's telemetry, result and command topics. Keep port 8080
-private or behind a TLS reverse proxy. Bearer authorization is required even for
-status; an absent token rejects all requests. Only explicitly requested HTTP
-controls publish commands. Do not use real vehicle actions as deployment checks.
-
-### SAIC client dependency choice
-
-The local [`saic-client` 0.1.0](../saic-rust-client) crate is the reference for
-SAIC API/domain operations. This service currently uses the gateway's MQTT
-command protocol and performs no direct SAIC API operations, so it does not add
-an unused Cargo dependency or duplicate login, transport or domain behavior.
-A future direct-API integration should use
-`saic-client = { version = "0.1.0", path = "../saic-rust-client" }` after reading
-that crate's `AGENTS.md` and operation docs; it would also require an explicit
-sibling-crate container build context. Notify HTTP delivery uses `reqwest`
-0.12.28 with Rustls; exact transitive versions are committed in `Cargo.lock`.
+The final Debian image runs as UID/GID 10001 and contains only the Rust executable
+and base runtime libraries. TLS uses Rustls and bundled trust roots; no Python or
+OpenSSL runtime is needed. HTTP defaults to `0.0.0.0:8080` in the image; override
+`HTTP_HOST=0.0.0.0` if your environment file supplies a loopback bind address.
+Keep the HTTP port private or behind a TLS reverse proxy. Only authenticated,
+explicitly requested controls send vehicle commands.
 
 ## Development
 
-All tests use synthetic data. The MQTT integration test runs a minimal broker on
-an ephemeral loopback port and exercises rejection, subscription, reconnect and
-shutdown. It does not read runtime credentials or contact SAIC or a vehicle. Notify tests
-use a loopback HTTP server and explicit test clocks to cover payloads, stale
-telemetry, deduplication, uncertain creation, discovery, completion, 410/429/error
-backoff and isolation from command success. No tests call real Notify endpoints.
+All tests use synthetic data. The session worker tests use a fake client boundary
+and exercise discovery, polling, reconnect, ordered commands, unknown outcomes,
+no replay, measurement conversion and freshness. HTTP and Notify tests cover
+authentication, validation, notification payloads, lifecycle and errors. No tests
+read runtime credentials, contact SAIC production, or operate a vehicle.
 
 ```sh
 cargo fmt --check
@@ -247,10 +191,10 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-Container smoke verification uses only synthetic broker settings and sends no
-vehicle commands (requires Docker and curl):
+Container verification uses synthetic credentials and an unreachable loopback
+HTTPS API address, and never sends vehicle controls (requires Docker and curl):
 
 ```sh
-docker build -t saic-rust-notify:local .
+./scripts/build-container.sh saic-rust-notify:local
 ./tests/container.sh saic-rust-notify:local
 ```

@@ -1,28 +1,36 @@
 use std::{env, time::Duration};
 
-// Deliberately no Debug: this holds broker credentials and an account identifier.
+// Deliberately no Debug: this holds account credentials.
 #[derive(Clone)]
 pub struct Config {
     pub notify: crate::notify::Config,
     pub http_host: String,
     pub http_port: u16,
     pub api_token: Option<String>,
-    pub host: String,
-    pub port: u16,
     pub username: String,
     pub password: String,
-    pub client_id: String,
-    pub account: Option<String>,
+    pub vin: Option<String>,
+    pub api_base_url: Option<String>,
     pub stale_after: Duration,
-    pub stale_check: Duration,
+    pub poll_interval: Duration,
     pub log_level: tracing::Level,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
+        // Read only the current directory; environment values take precedence.
+        let file = match dotenvy::from_path_iter(".env") {
+            Ok(iter) => iter
+                .collect::<Result<std::collections::HashMap<_, _>, _>>()
+                .map_err(|_| "Could not parse .env".to_owned())?,
+            Err(dotenvy::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                Default::default()
+            }
+            Err(_) => return Err("Could not read .env".into()),
+        };
         Self::load(|name| match env::var(name) {
             Ok(value) => Ok(Some(value)),
-            Err(env::VarError::NotPresent) => Ok(None),
+            Err(env::VarError::NotPresent) => Ok(file.get(name).cloned()),
             Err(_) => Err(format!("{name} must be valid Unicode")),
         })
     }
@@ -41,19 +49,16 @@ impl Config {
         };
         let http_host = read("HTTP_HOST", Some("127.0.0.1"))?;
         let http_port = positive(&read("HTTP_PORT", Some("8080"))?, "HTTP_PORT", 65535)? as u16;
-        let host = read("MQTT_HOST", Some("localhost"))?;
-        let port = positive(&read("MQTT_PORT", Some("1883"))?, "MQTT_PORT", 65535)? as u16;
-        let username = read("MQTT_USERNAME", None)?;
-        let password = read("MQTT_PASSWORD", None)?;
-        let client_id = read("MQTT_CLIENT_ID", Some("saic-telemetry-consumer"))?;
+        let username = read("SAIC_USERNAME", None)?;
+        let password = read("SAIC_PASSWORD", None)?;
         let stale_after = Duration::from_secs(positive(
             &read("STALE_AFTER_SECONDS", Some("600"))?,
             "STALE_AFTER_SECONDS",
             u32::MAX as u64,
         )?);
-        let stale_check = Duration::from_secs(positive(
-            &read("STALE_CHECK_SECONDS", Some("30"))?,
-            "STALE_CHECK_SECONDS",
+        let poll_interval = Duration::from_secs(positive(
+            &read("POLL_INTERVAL_SECONDS", Some("300"))?,
+            "POLL_INTERVAL_SECONDS",
             u32::MAX as u64,
         )?);
         let log_level = match read("LOG_LEVEL", Some("INFO"))?
@@ -68,27 +73,23 @@ impl Config {
             _ => return Err("LOG_LEVEL must be ERROR, WARN, WARNING, INFO, DEBUG or TRACE".into()),
         };
         let api_token = get("CLIMATE_API_TOKEN")?.filter(|s| !s.is_empty());
-        let account = get("MQTT_ACCOUNT")?.filter(|s| !s.is_empty());
-        if account.as_ref().is_some_and(|s| !valid_segment(s)) {
-            return Err("MQTT_ACCOUNT must be one nonempty MQTT topic segment".into());
+        let vin = get("SAIC_VIN")?.filter(|s| !s.is_empty());
+        if vin.as_ref().is_some_and(|s| !valid_segment(s)) {
+            return Err("SAIC_VIN must be a nonempty identifier".into());
         }
-        if username.len() > 65535 || password.len() > 65535 || client_id.len() > 65535 {
-            return Err("MQTT credentials and client ID must fit MQTT string limits".into());
-        }
+        let api_base_url = get("SAIC_BASE_URL")?.filter(|s| !s.is_empty());
         let notify = crate::notify::Config::load(&mut get)?;
         Ok(Self {
             notify,
             http_host,
             http_port,
             api_token,
-            host,
-            port,
             username,
             password,
-            client_id,
-            account,
+            vin,
+            api_base_url,
             stale_after,
-            stale_check,
+            poll_interval,
             log_level,
         })
     }
@@ -102,7 +103,7 @@ fn positive(raw: &str, name: &str, max: u64) -> Result<u64, String> {
 }
 
 pub(crate) fn valid_segment(s: &str) -> bool {
-    !s.is_empty()
+    !s.trim().is_empty()
         && !s
             .chars()
             .any(|c| c.is_control() || matches!(c, '/' | '+' | '#'))
