@@ -16,6 +16,10 @@ struct Fake {
     outcomes: VecDeque<Result<CommandState, ()>>,
     login_failures: usize,
     read_failure: bool,
+    read_failures: usize,
+    vehicle_calls: Arc<Mutex<Vec<String>>>,
+    fleet: Vec<String>,
+    active_vin: Option<String>,
     vehicle: VehicleStatusResp,
     charge: ChrgMgmtDataResp,
 }
@@ -32,19 +36,37 @@ impl Session for Fake {
     async fn vehicles(&mut self) -> Result<VehicleListResp, ()> {
         self.calls.lock().unwrap().push("discovery".into());
         Ok(VehicleListResp {
-            vin_list: Some(vec![VinInfo {
-                vin: Some("SYNTHETIC".into()),
-                ..Default::default()
-            }]),
+            vin_list: Some(
+                if self.fleet.is_empty() {
+                    vec!["SYNTHETIC".into()]
+                } else {
+                    self.fleet.clone()
+                }
+                .into_iter()
+                .map(|vin| VinInfo {
+                    vin: Some(vin),
+                    ..Default::default()
+                })
+                .collect(),
+            ),
             ..Default::default()
         })
     }
-    async fn vehicle(&mut self, _: &str) -> Result<VehicleStatusResp, ()> {
+    async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()> {
         self.calls.lock().unwrap().push("vehicle".into());
-        if self.read_failure {
+        self.vehicle_calls.lock().unwrap().push(vin.into());
+        if self.read_failure || self.read_failures > 0 {
+            self.read_failures = self.read_failures.saturating_sub(1);
             Err(())
         } else {
-            Ok(self.vehicle.clone())
+            let mut vehicle = self.vehicle.clone();
+            if self.active_vin.as_deref() == Some(vin) {
+                vehicle.basic_vehicle_status = Some(BasicVehicleStatus {
+                    engine_status: Some(1),
+                    ..Default::default()
+                });
+            }
+            Ok(vehicle)
         }
     }
     async fn charge(&mut self, _: &str) -> Result<ChrgMgmtDataResp, ()> {
@@ -311,7 +333,9 @@ async fn worker_retries_login_polls_and_never_replays_uncertain_commands() {
     let state = state();
     let shared = state.clone();
     let (tx, rx) = mpsc::channel(16);
-    let task = tokio::spawn(async move { worker(&mut fake, &config(), &shared, rx).await });
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &shared, rx, &mut Schedules::default()).await
+    });
     tokio::task::yield_now().await;
     assert_eq!(*calls.lock().unwrap(), vec!["login"]);
     assert!(!state.read().await.is_connected());
@@ -380,4 +404,190 @@ fn invalid_api_configuration_is_redacted_without_network_access() {
     assert!(!error.contains("secret"));
     config.api_base_url = Some("https://127.0.0.1:9/".into());
     assert!(client(&config).is_ok());
+}
+
+async fn settle() {
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn worker_vehicles_have_independent_deadlines_and_never_catch_up() {
+    let mut fake = Fake {
+        fleet: vec!["PARKED".into(), "ACTIVE".into()],
+        active_vin: Some("ACTIVE".into()),
+        ..Default::default()
+    };
+    let calls = fake.vehicle_calls.clone();
+    let shared = state();
+    let (tx, rx) = mpsc::channel(16);
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &shared, rx, &mut Schedules::default()).await;
+    });
+    settle().await;
+    assert_eq!(*calls.lock().unwrap(), vec!["PARKED", "ACTIVE"]);
+    tokio::time::advance(Duration::from_secs(30)).await;
+    settle().await;
+    assert_eq!(*calls.lock().unwrap(), vec!["PARKED", "ACTIVE", "ACTIVE"]);
+    tokio::time::advance(Duration::from_secs(3 * 86400)).await;
+    settle().await;
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["PARKED", "ACTIVE", "ACTIVE", "PARKED", "ACTIVE"]
+    );
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 5);
+    drop(tx);
+    task.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn worker_refresh_and_control_reconnect_preserve_known_parking_age() {
+    let now = chrono::Utc::now().timestamp();
+    let epoch = now - schedule::WINDOW;
+    let mut schedules = Schedules::default();
+    schedules
+        .vehicle("SYNTHETIC")
+        .success(epoch, Observation::default());
+    schedules
+        .vehicle("SYNTHETIC")
+        .success(now, Observation::default());
+    let mut fake = Fake {
+        outcomes: VecDeque::from([Err(())]),
+        ..Default::default()
+    };
+    let calls = fake.calls.clone();
+    let shared = state();
+    let (tx, rx) = mpsc::channel(16);
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &shared, rx, &mut schedules).await;
+        schedules
+    });
+    settle().await;
+    assert_eq!(*calls.lock().unwrap(), vec!["login", "discovery"]);
+    for action in [Action::Refresh, Action::Locate] {
+        let (reply, receive) = oneshot::channel();
+        tx.send(Request {
+            vin: "SYNTHETIC".into(),
+            action,
+            reply,
+        })
+        .await
+        .unwrap();
+        let _ = receive.await.unwrap();
+        settle().await;
+    }
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.as_str() == "vehicle")
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.as_str() == "login")
+            .count(),
+        2
+    );
+    tokio::time::advance(Duration::from_secs(86400 - 1)).await;
+    settle().await;
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.as_str() == "vehicle")
+            .count(),
+        1
+    );
+    drop(tx);
+    let mut schedules = task.await.unwrap();
+    assert_eq!(schedules.vehicle("SYNTHETIC").parked_since, Some(epoch));
+    assert_eq!(schedules.vehicle("SYNTHETIC").due(), now + schedule::DAY);
+}
+
+#[tokio::test]
+async fn another_vehicles_success_never_revives_failed_readings() {
+    let shared = state();
+    let mut fake = Fake {
+        charge: ChrgMgmtDataResp {
+            chrg_mgmt_data: Some(ChrgMgmtData {
+                bms_pack_soc_dsp: Some(500),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut schedules = Schedules::default();
+    poll_vehicle(&mut fake, &shared, "ONE", &mut schedules, &|| 1000)
+        .await
+        .unwrap();
+    fake.read_failure = true;
+    assert!(
+        poll_vehicle(&mut fake, &shared, "ONE", &mut schedules, &|| 1001)
+            .await
+            .is_err()
+    );
+    fake.read_failure = false;
+    poll_vehicle(&mut fake, &shared, "TWO", &mut schedules, &|| 1002)
+        .await
+        .unwrap();
+    let state = shared.read().await;
+    let fresh = |vin: &str| {
+        state
+            .fresh(
+                &Source::Vehicle(vin.into()),
+                "vehicle/drivetrain/soc",
+                Instant::now(),
+                chrono::Utc::now(),
+                Duration::from_secs(600),
+            )
+            .is_some()
+    };
+    assert!(!fresh("ONE"));
+    assert!(fresh("TWO"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn worker_reauthentication_does_not_reset_exponential_backoff() {
+    let mut fake = Fake {
+        read_failures: 2,
+        ..Default::default()
+    };
+    let calls = fake.vehicle_calls.clone();
+    let shared = state();
+    let (tx, rx) = mpsc::channel(16);
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &shared, rx, &mut Schedules::default()).await;
+    });
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    tokio::time::advance(Duration::from_secs(29)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    tokio::time::advance(Duration::from_secs(59)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    tokio::time::advance(Duration::from_secs(119)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert_eq!(calls.lock().unwrap().len(), 4);
+    drop(tx);
+    task.await.unwrap();
 }

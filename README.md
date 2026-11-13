@@ -26,7 +26,6 @@ API responses and dependency diagnostics, including at TRACE.
 | `SAIC_PASSWORD` | Required, nonempty SAIC password |
 | `SAIC_VIN` | Optional vehicle selection; must belong to the authenticated account |
 | `SAIC_BASE_URL` | Optional HTTPS API root override; defaults to the client's MG Europe profile |
-| `POLL_INTERVAL_SECONDS` | `300`, positive integer up to 4294967295 |
 | `STALE_AFTER_SECONDS` | `600`, positive integer up to 4294967295 |
 | `HTTP_HOST` | `127.0.0.1`; bind interface for HTTP |
 | `HTTP_PORT` | `8080`, integer 1–65535 |
@@ -35,17 +34,55 @@ API responses and dependency diagnostics, including at TRACE.
 | `NOTIFY_ACTIVITY_URL` | Optional Notify device Live Activity URL; unset/empty disables both activities |
 | `LOG_LEVEL` | `INFO`; ERROR, WARN/WARNING, INFO, DEBUG, TRACE supported |
 
-Starting the service logs in, discovers account vehicles, then polls live vehicle
-status and charging management data. **Live polling can wake the vehicle.** Login
-or discovery failures retry after 60 seconds. Operation failures mark the cached
-state disconnected, wait one polling interval, then authenticate and discover
-again. HTTP and notification workers remain available during retry waits.
+Starting the service loads durable scheduling state, logs in, discovers account
+vehicles, then polls live vehicle status and charging management data when due.
+**Live polling can wake the vehicle.** Login or discovery failures retry after
+60 seconds. Poll failures mark cached state disconnected and reauthenticate without resetting
+vehicle deadlines. Each vehicle retries after 30, 60, 120, 240… seconds, capped at
+its applicable parked interval. A successful refresh resets the backoff. HTTP and
+notification workers remain available during retry waits.
 SIGINT/SIGTERM stop the service and cancel pending network requests.
 
 Without `SAIC_VIN`, all discovered vehicles are polled independently (maximum 128).
 Controls and notifications require exactly one discovered vehicle. An explicit
 VIN selects only that vehicle after verifying account membership. Invalid or
 incomplete discovery fails closed. No controls run during discovery or polling.
+
+### Fixed polling policy
+
+Scheduling is independent per vehicle, following the gateway default precedence:
+new observed activity, error recovery, charging, active HV battery, shutdown grace,
+then parked. Running, remote climate or rear-window heating count as HV activity.
+Active vehicles poll every 30 seconds. On transition to inactive, a parking epoch
+starts: polls run every 120 seconds for a 600-second shutdown grace, then at
+12, 24, 36 and 48 hours from that epoch, followed by 72 hours and every 24 hours.
+Late polls skip missed deadlines rather than replaying them. A genuine observed
+return to active or charging ends the parked period. Manual refreshes, reconnects
+and ordinary refreshes never restart a known parking epoch.
+
+Charging uses `36 × capacity_kWh / abs(power_kW)` seconds for 1% SOC, limited by
+positive remaining charge time and bounded to 30 seconds–24 hours. Capacity uses
+the client's reported battery capacity (tenths of kWh); model-specific capacity
+corrections are unavailable. Low power (at most 1 kW), missing power or missing
+capacity uses at least 120 seconds, retaining a longer prior charging interval.
+An enabled vehicle charging schedule triggers a check ten minutes after its start
+in the service's local timezone, matching the gateway default timezone behavior.
+No extra schedule or activity-detection API reads are added.
+
+All policy values are constants; there are no polling settings or modes. The
+former interval environment setting is ignored. Status and Notify reads only use
+stored telemetry, even when stale or missing; controls never trigger live reads.
+`POST /refresh` remains the explicit way to request an earlier live update.
+
+The service atomically saves per-vehicle parking epochs, deadlines and backoff in
+`data/polling.json` relative to its working directory. Keys are hashed vehicle
+identifiers; no credentials or telemetry are stored. Keep this directory writable
+and persistent, run only one instance against it, and preserve it on upgrades.
+Unreadable/corrupt state or write failures stop vehicle access rather than silently
+resetting history. On first start without history, each vehicle is read once; an
+inactive observation starts the 48-hour window at that observation because its
+prior parking age is unknown. On restart with history, saved deadlines still
+apply, and telemetry remains empty until the next scheduled or explicit refresh.
 
 ### Telemetry and freshness
 
@@ -92,7 +129,7 @@ standard temperature profile. At <=6°C it then heats left seat, right seat and
 steering wheel; at <=4°C it finally starts rear defrost. Each operation uses a
 client command builder and waits for completion before the next. The two seats
 are always independent commands. There are no status reads between commands.
-The normal polling interval resumes after a control; an explicit `/refresh` can
+Controls leave scheduled polling deadlines unchanged; an explicit `/refresh` can
 request an earlier update. Controls are mutually exclusive.
 
 Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
@@ -165,12 +202,15 @@ a bare `docker build .` does not contain the required sibling source.
 docker run --rm --name saic-rust-notify \
   --env-file .env \
   --publish 127.0.0.1:8080:8080 \
+  --mount type=volume,src=saic-polling,dst=/app/data \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   saic-rust-notify:local
 ```
 
 The final Debian image runs as UID/GID 10001 and contains only the Rust executable
-and base runtime libraries. TLS uses Rustls and bundled trust roots; no Python or
+and base runtime libraries. The `/app/data` volume must persist across container
+replacement; the image creates it with UID/GID 10001 ownership. TLS uses Rustls
+and bundled trust roots; no Python or
 OpenSSL runtime is needed. HTTP defaults to `0.0.0.0:8080` in the image; override
 `HTTP_HOST=0.0.0.0` if your environment file supplies a loopback bind address.
 Keep the HTTP port private or behind a TLS reverse proxy. Only authenticated,

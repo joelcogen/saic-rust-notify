@@ -3,7 +3,7 @@ use crate::config::valid_segment;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
@@ -97,6 +97,7 @@ pub enum ControlError {
 #[derive(Default)]
 pub struct Telemetry {
     connected: bool,
+    failed_sources: BTreeSet<Source>,
     sources: BTreeMap<Source, BTreeMap<String, Reading>>,
     last_message_at: Option<Instant>,
     stale_warning_emitted: bool,
@@ -105,13 +106,19 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
+    pub fn fail_vehicle(&mut self, vin: &str) {
+        self.failed_sources.insert(Source::Vehicle(vin.into()));
+    }
     pub fn clear_vehicle(&mut self, vin: &str) {
+        self.failed_sources.remove(&Source::Vehicle(vin.into()));
         if let Some(readings) = self.sources.remove(&Source::Vehicle(vin.into())) {
             self.stored_bytes -= readings.values().map(|r| r.stored_bytes).sum::<usize>();
         }
         self.sources.entry(Source::Vehicle(vin.into())).or_default();
     }
     pub fn select_vehicles(&mut self, vins: &[String]) {
+        self.failed_sources
+            .retain(|source| matches!(source, Source::Vehicle(vin) if vins.contains(vin)));
         self.sources
             .retain(|source, _| matches!(source, Source::Vehicle(vin) if vins.contains(vin)));
         self.stored_bytes = self
@@ -243,7 +250,7 @@ impl Telemetry {
         wall: DateTime<Utc>,
         ttl: Duration,
     ) -> Option<&Value> {
-        if !self.connected {
+        if !self.connected || self.failed_sources.contains(source) {
             return None;
         }
         let reading = self.latest(source, key)?;

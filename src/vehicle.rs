@@ -16,6 +16,9 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+mod schedule;
+use schedule::{Observation, Schedules};
+
 pub enum Action {
     Refresh,
     Locate,
@@ -78,8 +81,15 @@ pub async fn run(
     requests: mpsc::Receiver<Request>,
     shutdown: impl Future<Output = ()>,
 ) {
+    let mut schedules = match Schedules::open("data/polling.json".into()) {
+        Ok(schedules) => schedules,
+        Err(_) => {
+            tracing::error!("Polling state unavailable; refusing vehicle access");
+            return;
+        }
+    };
     tokio::select! {
-        _ = worker(&mut client, &config, &state, requests) => {},
+        _ = worker(&mut client, &config, &state, requests, &mut schedules) => {},
         _ = shutdown => {},
     }
     state.write().await.set_connected(false);
@@ -112,60 +122,106 @@ async fn worker(
     config: &Config,
     state: &SharedTelemetry,
     mut requests: mpsc::Receiver<Request>,
+    schedules: &mut Schedules,
 ) {
+    let start = tokio::time::Instant::now();
+    let epoch = chrono::Utc::now().timestamp();
+    let now = || epoch + start.elapsed().as_secs() as i64;
+    let mut vins = Vec::new();
+    let mut authenticated = false;
     loop {
-        state.write().await.set_connected(false);
-        let discovered = async {
-            client.login().await?;
-            select_vehicles(client.vehicles().await?, config.vin.as_deref())
-        }
-        .await;
-        let Ok(vins) = discovered else {
-            tracing::warn!("SAIC login or vehicle discovery unavailable; retrying");
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            continue;
-        };
-        state.write().await.select_vehicles(&vins);
-        let mut poll = tokio::time::interval(config.poll_interval);
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            let result = tokio::select! {
-                request = requests.recv() => {
-                    let Some(request) = request else { return; };
-                    // Dropped/expired HTTP requests must not start a queued action.
-                    if request.reply.is_closed() { continue; }
-                    if vins.len() != 1 || vins[0] != request.vin {
-                        let _ = request.reply.send(Err("A single authorized vehicle is required"));
-                        continue;
-                    }
-                    let result = execute(client, state, &request.vin, request.action).await;
-                    let failed = result.is_err();
-                    let _ = request.reply.send(result);
-                    // No implicit status refresh after controls; resume the normal
-                    // polling interval, including after failure.
-                    poll.reset();
-                    if failed { Err(()) } else { Ok(()) }
-                },
-                _ = poll.tick() => {
-                    let mut result = Ok(());
-                    for vin in &vins {
-                        if refresh(client, state, vin).await.is_err() { result = Err(()); break; }
-                    }
-                    result
-                }
-            };
-            if result.is_err() {
-                state.write().await.set_connected(false);
-                while let Ok(request) = requests.try_recv() {
-                    let _ = request
-                        .reply
-                        .send(Err("SAIC unavailable; queued request cancelled"));
-                }
-                tracing::warn!("SAIC operation failed; cached readings are stale");
-                // Reauthentication never resubmits the failed control.
-                tokio::time::sleep(config.poll_interval).await;
-                break;
+        if !authenticated {
+            state.write().await.set_connected(false);
+            let discovered = async {
+                client.login().await?;
+                select_vehicles(client.vehicles().await?, config.vin.as_deref())
             }
+            .await;
+            let Ok(discovered) = discovered else {
+                tracing::warn!("SAIC login or vehicle discovery unavailable; retrying");
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            };
+            vins = discovered;
+            state.write().await.select_vehicles(&vins);
+            authenticated = true;
+        }
+        let due = vins
+            .iter()
+            .map(|vin| schedules.vehicle(vin).due())
+            .min()
+            .unwrap();
+        let wait = Duration::from_secs(due.saturating_sub(now()).max(0) as u64);
+        tokio::select! {
+            request = requests.recv() => {
+                let Some(request) = request else { return; };
+                if request.reply.is_closed() { continue; }
+                if vins.len() != 1 || vins[0] != request.vin {
+                    let _ = request.reply.send(Err("A single authorized vehicle is required"));
+                    continue;
+                }
+                let result = if matches!(request.action, Action::Refresh) {
+                    poll_vehicle(client, state, &request.vin, schedules, &now).await
+                        .map(|()| "Vehicle refreshed").map_err(|()| "Vehicle refresh failed")
+                } else {
+                    // Controls never change polling deadlines or parking age.
+                    execute(client, state, &request.vin, request.action).await
+                };
+                if result.is_err() {
+                    state.write().await.fail_vehicle(&request.vin);
+                    state.write().await.set_connected(false);
+                    authenticated = false;
+                }
+                let _ = request.reply.send(result);
+            }
+            _ = tokio::time::sleep(wait) => {
+                // Each due vehicle gets at most one attempt. Deadlines are based
+                // on completion, so delayed operations cannot cause catch-up bursts.
+                for vin in &vins {
+                    if schedules.vehicle(vin).due() <= now() {
+                        if poll_vehicle(client, state, vin, schedules, &now).await.is_err() {
+                            state.write().await.set_connected(false);
+                            authenticated = false;
+                        }
+                        // Persist before another vehicle's potentially slow read.
+                        if schedules.save().is_err() {
+                            tracing::error!("Could not persist polling state; stopping vehicle access");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if !authenticated {
+            while let Ok(request) = requests.try_recv() {
+                let _ = request
+                    .reply
+                    .send(Err("SAIC unavailable; queued request cancelled"));
+            }
+        }
+        if schedules.save().is_err() {
+            tracing::error!("Could not persist polling state; stopping vehicle access");
+            return;
+        }
+    }
+}
+
+async fn poll_vehicle(
+    client: &mut impl Session,
+    state: &SharedTelemetry,
+    vin: &str,
+    schedules: &mut Schedules,
+    now: &impl Fn() -> i64,
+) -> Result<(), ()> {
+    match refresh(client, state, vin).await {
+        Ok(observation) => {
+            schedules.vehicle(vin).success(now(), observation);
+            Ok(())
+        }
+        Err(()) => {
+            state.write().await.fail_vehicle(vin);
+            schedules.vehicle(vin).failure(now());
+            Err(())
         }
     }
 }
@@ -200,9 +256,14 @@ async fn execute(
     Ok(message)
 }
 
-async fn refresh(client: &mut impl Session, state: &SharedTelemetry, vin: &str) -> Result<(), ()> {
+async fn refresh(
+    client: &mut impl Session,
+    state: &SharedTelemetry,
+    vin: &str,
+) -> Result<Observation, ()> {
     let vehicle = client.vehicle(vin).await?;
     let charge = client.charge(vin).await?;
+    let observation = Observation::read(&vehicle, &charge, chrono::Utc::now().timestamp());
     let now = Instant::now();
     let mut state = state.write().await;
     let source = Source::Vehicle(vin.into());
@@ -236,7 +297,7 @@ async fn refresh(client: &mut impl Session, state: &SharedTelemetry, vin: &str) 
             .map_err(|_| ())?;
     }
     state.set_connected(true);
-    Ok(())
+    Ok(observation)
 }
 
 type Readings = Vec<(&'static str, Value)>;

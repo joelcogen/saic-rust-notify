@@ -12,7 +12,6 @@ pub struct Config {
     pub vin: Option<String>,
     pub api_base_url: Option<String>,
     pub stale_after: Duration,
-    pub poll_interval: Duration,
     pub log_level: tracing::Level,
 }
 
@@ -56,11 +55,6 @@ impl Config {
             "STALE_AFTER_SECONDS",
             u32::MAX as u64,
         )?);
-        let poll_interval = Duration::from_secs(positive(
-            &read("POLL_INTERVAL_SECONDS", Some("300"))?,
-            "POLL_INTERVAL_SECONDS",
-            u32::MAX as u64,
-        )?);
         let log_level = match read("LOG_LEVEL", Some("INFO"))?
             .to_ascii_uppercase()
             .as_str()
@@ -89,7 +83,6 @@ impl Config {
             vin,
             api_base_url,
             stale_after,
-            poll_interval,
             log_level,
         })
     }

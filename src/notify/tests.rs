@@ -488,3 +488,49 @@ async fn notification_failure_cannot_change_climate_success_or_replay_commands()
     assert!(publishes.try_recv().is_err());
     s.done();
 }
+
+#[tokio::test]
+async fn status_and_notify_reads_never_request_live_data_even_when_missing_or_stale() {
+    use tower::ServiceExt;
+    let state = Arc::new(RwLock::new(Telemetry::default()));
+    state.write().await.select_vehicles(&["SYNTHETIC".into()]);
+    let (controls, mut requests) = Controls::new(state.clone(), Duration::from_secs(600));
+    let app = crate::http::router(controls, Some("synthetic-token"));
+    for connected in [false, true] {
+        state.write().await.set_connected(connected);
+        if connected {
+            state
+                .write()
+                .await
+                .ingest(
+                    decode("saic/test/vehicles/SYNTHETIC/drivetrain/soc", b"50", None)
+                        .unwrap()
+                        .unwrap(),
+                    false,
+                    Instant::now() - Duration::from_secs(601),
+                )
+                .unwrap();
+        }
+        for _ in 0..5 {
+            let r =
+                Readings::read(&state, Duration::from_secs(600), Instant::now(), Utc::now()).await;
+            assert!(r.fresh.is_empty());
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/status")
+                        .header("Authorization", "Bearer synthetic-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert!(matches!(
+            requests.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+}

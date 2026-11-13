@@ -3,7 +3,7 @@
 set -eu
 image=${1:-saic-rust-notify:local}
 container_name=saic-rust-notify-smoke-$$
-cleanup() { docker rm -f "$container_name" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -fv "$container_name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT HUP INT TERM
 docker run -d --name "$container_name" \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -23,6 +23,7 @@ done
 [ "$ready" = true ]
 [ "$(docker exec "$container_name" id -u)" = 10001 ]
 [ "$(docker exec "$container_name" id -g)" = 10001 ]
+docker exec "$container_name" sh -ec 'test -w /app/data && test -f /app/data/polling.json'
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$port/api/status")" = 401 ]
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Authorization: Bearer synthetic-smoke-token' "http://$port/dashboard.html")" = 404 ]
 docker exec "$container_name" sh -ec '

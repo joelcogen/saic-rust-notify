@@ -10,6 +10,8 @@ FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=build /build/saic-rust-notify/target/release/saic-rust-notify /usr/local/bin/saic-rust-notify
 ENV HTTP_HOST=0.0.0.0 HTTP_PORT=8080
+RUN mkdir /app/data && chown 10001:10001 /app/data
+VOLUME ["/app/data"]
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/saic-rust-notify"]

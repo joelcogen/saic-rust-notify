@@ -21,14 +21,12 @@ fn environment_defaults_and_validation_do_not_expose_values() {
     assert_eq!(c.http_port, 8080);
     assert!(c.api_token.is_none());
     assert_eq!(c.stale_after, Duration::from_secs(600));
-    assert_eq!(c.poll_interval, Duration::from_secs(300));
     assert!(config(&[]).unwrap_err_safe().contains("SAIC_USERNAME"));
     for (key, value) in [
         ("HTTP_PORT", "65536"),
         ("HTTP_PORT", "0"),
         ("HTTP_HOST", " "),
         ("STALE_AFTER_SECONDS", "-1"),
-        ("POLL_INTERVAL_SECONDS", "0"),
         ("SAIC_VIN", "a/+"),
         ("SAIC_VIN", " "),
         ("LOG_LEVEL", "secret-invalid"),

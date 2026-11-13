@@ -42,3 +42,20 @@ fn dotenv_is_local_environment_wins_and_errors_are_redacted() {
     fs::create_dir(&child).unwrap();
     assert!(run(&child, &[]).contains("SAIC_USERNAME is required"));
 }
+
+#[test]
+fn former_polling_setting_is_never_consulted() {
+    for former in ["1", "0", "invalid", "86400"] {
+        saic_rust_notify::config::Config::load(|key| {
+            assert_ne!(
+                key, "POLL_INTERVAL_SECONDS",
+                "policy must not read {former}"
+            );
+            Ok(match key {
+                "SAIC_USERNAME" | "SAIC_PASSWORD" => Some("synthetic".into()),
+                _ => None,
+            })
+        })
+        .unwrap_or_else(|_| panic!("synthetic configuration must load"));
+    }
+}

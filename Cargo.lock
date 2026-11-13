@@ -1131,6 +1131,7 @@ dependencies = [
  "regex",
  "reqwest",
  "saic-client",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",
