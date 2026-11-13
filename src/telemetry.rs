@@ -104,6 +104,50 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
+    pub fn snapshot(&self, now: Instant, wall: DateTime<Utc>, ttl: Duration) -> Value {
+        let sources: Vec<_> = self
+            .sources
+            .iter()
+            .map(|(source, values)| {
+                let readings: serde_json::Map<String, Value> = values
+                    .iter()
+                    .map(|(key, r)| {
+                        (
+                            key.clone(),
+                            serde_json::json!({
+                                "value": r.value, "retained": r.retained,
+                                "fresh": self.fresh(source, key, now, wall, ttl).is_some()
+                            }),
+                        )
+                    })
+                    .collect();
+                let (kind, name) = match source {
+                    Source::Account(s) => ("account", s),
+                    Source::Vehicle(s) => ("vehicle", s),
+                };
+                serde_json::json!({"kind": kind, "source": name, "readings": readings})
+            })
+            .collect();
+        // Keep Python keys when unambiguous; never overwrite another source's reading.
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for values in self.sources.values() {
+            for key in values.keys() {
+                *counts.entry(key).or_default() += 1;
+            }
+        }
+        let mut readings = serde_json::Map::new();
+        for source in &sources {
+            for (key, value) in source["readings"].as_object().unwrap() {
+                let key = if counts[key.as_str()] == 1 {
+                    key.clone()
+                } else {
+                    format!("{}/{}", source["source"].as_str().unwrap(), key)
+                };
+                readings.insert(key, value.clone());
+            }
+        }
+        serde_json::json!({"connected": self.connected, "readings": readings, "sources": sources})
+    }
     pub fn set_connected(&mut self, connected: bool) {
         self.connected = connected;
     }

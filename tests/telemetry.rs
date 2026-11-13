@@ -17,12 +17,18 @@ fn environment_defaults_and_validation_do_not_expose_values() {
         ("MQTT_PASSWORD", "synthetic-secret"),
     ];
     let c = config(&base).unwrap();
+    assert_eq!(c.http_host, "127.0.0.1");
+    assert_eq!(c.http_port, 8080);
+    assert!(c.api_token.is_none());
     assert_eq!(c.host, "localhost");
     assert_eq!(c.port, 1883);
     assert_eq!(c.stale_after, Duration::from_secs(600));
     assert_eq!(c.stale_check, Duration::from_secs(30));
     assert!(config(&[]).unwrap_err_safe().contains("MQTT_USERNAME"));
     for (key, value) in [
+        ("HTTP_PORT", "65536"),
+        ("HTTP_PORT", "0"),
+        ("HTTP_HOST", " "),
         ("MQTT_PORT", "65536"),
         ("MQTT_PORT", "0"),
         ("MQTT_PORT", "secret-invalid"),

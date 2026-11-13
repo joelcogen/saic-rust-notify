@@ -15,12 +15,10 @@ operations and development guidance.
 
 ## MQTT consumer
 
-The current executable implements the MQTT telemetry portion of the rewrite.
-It subscribes to `saic/#` with QoS 0, using plain MQTT over TCP, and makes no
-SAIC API requests or vehicle commands. HTTP endpoints, commands and Notify!
-integration are separate work; no web dashboard is served. MQTT transport and
-freshness belong here, not in `saic-client`; no SAIC API/domain functionality is
-duplicated or needed by this consumer.
+The executable subscribes to `saic/#` with QoS 0 over plain MQTT/TCP and
+serves authenticated HTTP status and vehicle controls. Commands use the gateway's
+MQTT protocol; no SAIC API functionality is duplicated from `saic-client`.
+Notify delivery is separate work; no web dashboard is served.
 
 Run with Rust/Cargo and process environment variables (the service does not read
 `.env` files):
@@ -33,6 +31,9 @@ cargo build --locked --release
 
 | Variable | Default / requirement |
 | --- | --- |
+| `HTTP_HOST` | `127.0.0.1`; bind interface for HTTP |
+| `HTTP_PORT` | `8080`, integer 1–65535 |
+| `CLIMATE_API_TOKEN` | Bearer token; unset/empty rejects every HTTP request |
 | `MQTT_HOST` | `localhost` |
 | `MQTT_PORT` | `1883`, integer 1–65535 |
 | `MQTT_USERNAME` | Required, nonempty broker username |
@@ -54,8 +55,7 @@ Connection failures retry with delays from 1 to 60 seconds. Every connection
 subscribes again; state becomes connected only after subscription acceptance.
 SIGINT/SIGTERM stop the consumer. Cached state survives reconnects but not process
 restarts. Controls can obtain a base only while connected with exactly one
-discovered vehicle, including across accounts. This is a validation API only;
-the executable never publishes vehicle commands.
+discovered vehicle, including across accounts. Commands are refused when discovery is incomplete or ambiguous.
 
 ### State and freshness
 
@@ -90,6 +90,49 @@ stored readings and 16 MiB of serialized values/keys (in-memory JSON overhead is
 additional). Excess messages are rejected; existing entries remain. A state
 capacity rejection disables control-base validation until restart, so incomplete
 discovery cannot accidentally authorize a single-vehicle control.
+
+## HTTP API
+
+All requests require `Authorization: Bearer <CLIMATE_API_TOKEN>`. Token digests
+are compared in constant time. Responses carry `Cache-Control: no-store`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, frame denial and
+a restrictive Content Security Policy. Use a trusted TLS reverse proxy for
+access beyond loopback; this listener speaks HTTP.
+
+- `GET /api/status`: connection state and readings with `value`, `retained`, and
+  `fresh`. `sources` preserves account/vehicle isolation; ambiguous `readings` keys
+  are prefixed with their source to avoid collisions. Unique keys retain the
+  Python format, such as `vehicle/climate/interiorTemperature`.
+- `POST /climate/start`: optional JSON object with only `temperature`. Numbers
+  are Celsius; text supports decimal comma, signs and optional °C/°F (also º,
+  plain C/F and Shortcuts whitespace). Booleans, null and nonfinite values fail.
+  Without an override, use the lower valid fresh interior/exterior temperature;
+  fail with 503 if neither is fresh.
+- `POST /refresh`: publish `refresh/mode/set=force`, return 202 after PUBACK.
+- `POST /locate`: publish `location/findMyCar/set=lights_only`, never horn;
+  return 200 only after PUBACK and a new non-retained `Success` result.
+
+Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
+malformed JSON, unknown keys and bodies on status/refresh/locate return 400.
+Authentication failures return 401; unknown routes (including dashboard assets)
+return 404. Vehicle unavailability, rejection, partial failure and unknown
+outcomes return 503 with distinct messages. Raw gateway errors are not exposed.
+
+Climate starts front defrost at <=4°C, otherwise normal remote climate. At <=6°C
+it then heats left seat, right seat and steering wheel; at <=4°C it finally starts
+rear defrost. These ordered commands are sent in one non-retained QoS 1 batch
+with a unique UUID requestId. Success requires PUBACK within five seconds and a
+matching non-retained result with the complete ordered success list within 360
+seconds. Locate waits up to 45 seconds for its result; its gateway protocol has
+no request ID, so avoid concurrent external locate callers. Climate and locate
+are mutually exclusive within this service. Refresh also requires PUBACK within
+five seconds. Disconnects and missing acknowledgments/results are unknown
+outcomes: earlier commands may have succeeded; check the vehicle before retrying.
+Commands are never automatically replayed across reconnection.
+
+An in-process `Controls::preheating` watch signal starts only after acknowledged
+full climate success. It is the integration point for the subsequent Notify Live
+Activity implementation; this story does not send Notify notifications.
 
 ## Development
 

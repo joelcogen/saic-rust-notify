@@ -20,12 +20,25 @@ async fn main() {
                 .with_filter(Targets::new().with_target("saic_rust_notify", config.log_level)),
         )
         .init();
-    mqtt::run(
-        config,
-        Arc::new(RwLock::new(Telemetry::default())),
-        shutdown(),
-    )
-    .await;
+    let state = Arc::new(RwLock::new(Telemetry::default()));
+    let (controls, commands) =
+        saic_rust_notify::controls::Controls::new(state.clone(), config.stale_after);
+    let app = saic_rust_notify::http::router(controls.clone(), config.api_token.as_deref());
+    let listener =
+        match tokio::net::TcpListener::bind((config.http_host.as_str(), config.http_port)).await {
+            Ok(listener) => listener,
+            Err(_) => {
+                eprintln!("Could not bind HTTP listener");
+                std::process::exit(2);
+            }
+        };
+    tokio::select! {
+        _ = mqtt::run_with_controls(config, state.clone(), commands, controls.results.clone(), shutdown()) => {},
+        result = axum::serve(listener, app) => {
+            if result.is_err() { tracing::error!("HTTP server stopped unexpectedly"); }
+        }
+    }
+    state.write().await.set_connected(false);
 }
 
 async fn shutdown() {

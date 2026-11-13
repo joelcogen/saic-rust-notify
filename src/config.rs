@@ -3,6 +3,9 @@ use std::{env, time::Duration};
 // Deliberately no Debug: this holds broker credentials and an account identifier.
 #[derive(Clone)]
 pub struct Config {
+    pub http_host: String,
+    pub http_port: u16,
+    pub api_token: Option<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -35,6 +38,8 @@ impl Config {
             }
             Ok(value)
         };
+        let http_host = read("HTTP_HOST", Some("127.0.0.1"))?;
+        let http_port = positive(&read("HTTP_PORT", Some("8080"))?, "HTTP_PORT", 65535)? as u16;
         let host = read("MQTT_HOST", Some("localhost"))?;
         let port = positive(&read("MQTT_PORT", Some("1883"))?, "MQTT_PORT", 65535)? as u16;
         let username = read("MQTT_USERNAME", None)?;
@@ -61,6 +66,7 @@ impl Config {
             "TRACE" => tracing::Level::TRACE,
             _ => return Err("LOG_LEVEL must be ERROR, WARN, WARNING, INFO, DEBUG or TRACE".into()),
         };
+        let api_token = get("CLIMATE_API_TOKEN")?.filter(|s| !s.is_empty());
         let account = get("MQTT_ACCOUNT")?.filter(|s| !s.is_empty());
         if account.as_ref().is_some_and(|s| !valid_segment(s)) {
             return Err("MQTT_ACCOUNT must be one nonempty MQTT topic segment".into());
@@ -69,6 +75,9 @@ impl Config {
             return Err("MQTT credentials and client ID must fit MQTT string limits".into());
         }
         Ok(Self {
+            http_host,
+            http_port,
+            api_token,
             host,
             port,
             username,

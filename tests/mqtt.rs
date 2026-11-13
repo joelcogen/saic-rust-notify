@@ -174,3 +174,85 @@ async fn broker_rejection_subscription_rejection_reconnect_and_shutdown() {
     .await
     .expect("MQTT lifecycle test timed out");
 }
+
+#[tokio::test]
+async fn control_publish_requires_matching_puback_and_never_replays_after_disconnect() {
+    use saic_rust_notify::{controls::Controls, mqtt::run_with_controls, telemetry::decode};
+    timeout(Duration::from_secs(15), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port().to_string();
+        let config = Config::load(|key| {
+            Ok(match key {
+                "MQTT_HOST" => Some("127.0.0.1".into()),
+                "MQTT_PORT" => Some(port.clone()),
+                "MQTT_USERNAME" | "MQTT_PASSWORD" => Some("test".into()),
+                _ => None,
+            })
+        })
+        .unwrap();
+        let state = Arc::new(RwLock::new(Telemetry::default()));
+        state
+            .write()
+            .await
+            .ingest(
+                decode(
+                    "saic/test/vehicles/CAR/climate/interiorTemperature",
+                    b"5",
+                    None,
+                )
+                .unwrap()
+                .unwrap(),
+                false,
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        let (controls, rx) = Controls::new(state.clone(), Duration::from_secs(600));
+        let (stop, stopped) = oneshot::channel();
+        let runner = tokio::spawn(run_with_controls(
+            config,
+            state.clone(),
+            rx,
+            controls.results.clone(),
+            async {
+                let _ = stopped.await;
+            },
+        ));
+        let mut stream = connect(&listener).await;
+        subscribe(&mut stream, true).await;
+        wait_connected(&state, true).await;
+        for acknowledge in [true, false] {
+            let c = controls.clone();
+            let task = tokio::spawn(async move { c.execute("/refresh", None).await });
+            let (kind, body) = packet(&mut stream).await;
+            assert_eq!(kind, 0x32, "QoS 1, non-retained, no DUP");
+            let length = u16::from_be_bytes([body[0], body[1]]) as usize;
+            assert_eq!(
+                &body[2..2 + length],
+                b"saic/test/vehicles/CAR/refresh/mode/set"
+            );
+            assert_eq!(&body[4 + length..], b"force");
+            let id = &body[2 + length..4 + length];
+            assert!(!task.is_finished());
+            if acknowledge {
+                stream.write_all(&[0x40, 2, id[0], id[1]]).await.unwrap();
+                assert_eq!(task.await.unwrap().unwrap(), "Refresh requested");
+            } else {
+                drop(stream);
+                assert!(task.await.unwrap().unwrap_err().contains("unknown"));
+                stream = connect(&listener).await;
+                subscribe(&mut stream, true).await;
+                wait_connected(&state, true).await;
+                assert!(
+                    timeout(Duration::from_millis(100), packet(&mut stream))
+                        .await
+                        .is_err(),
+                    "must not replay an uncertain vehicle action"
+                );
+            }
+        }
+        stop.send(()).unwrap();
+        runner.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
