@@ -41,10 +41,14 @@ trait Session {
 }
 impl Session for SaicClient {
     async fn login(&mut self) -> Result<(), ()> {
-        SaicClient::login(self).await.map_err(|_| ())
+        SaicClient::login(self)
+            .await
+            .map_err(|error| log_session_error("login", &error))
     }
     async fn vehicles(&mut self) -> Result<VehicleListResp, ()> {
-        SaicClient::vehicles(self).await.map_err(|_| ())
+        SaicClient::vehicles(self)
+            .await
+            .map_err(|error| log_session_error("discovery", &error))
     }
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()> {
         self.vehicle_status_live(vin, CommandOptions::default())
@@ -61,6 +65,31 @@ impl Session for SaicClient {
             .await
             .map(|o| o.state)
             .map_err(|_| ())
+    }
+}
+
+// Only allowlisted categories and numeric protocol codes may enter logs.
+fn log_session_error(stage: &'static str, error: &saic_client::Error) {
+    use saic_client::Error;
+    let category = match error {
+        Error::Authentication(_) => "authentication",
+        Error::Rejected(_) => "rejected",
+        Error::Http(_) => "http",
+        Error::Timeout => "timeout",
+        Error::Transport => "transport",
+        Error::InvalidResponse(_) => "invalid_response",
+        Error::Decryption => "decryption",
+        Error::Clock => "clock",
+        Error::Configuration(_) => "configuration",
+        Error::Unsupported(_) => "unsupported",
+        _ => "unknown",
+    };
+    match error {
+        Error::Authentication(failure) | Error::Rejected(failure) | Error::Http(failure) => {
+            tracing::warn!(stage, category, http_status = failure.http_status,
+                saic_code = ?failure.saic_code, "SAIC session request failed");
+        }
+        _ => tracing::warn!(stage, category, "SAIC session request failed"),
     }
 }
 
@@ -132,13 +161,17 @@ async fn worker(
     loop {
         if !authenticated {
             state.write().await.set_connected(false);
+            let mut stage = "login";
             let discovered = async {
                 client.login().await?;
-                select_vehicles(client.vehicles().await?, config.vin.as_deref())
+                stage = "discovery";
+                let vehicles = client.vehicles().await?;
+                stage = "vehicle_selection";
+                select_vehicles(vehicles, config.vin.as_deref())
             }
             .await;
             let Ok(discovered) = discovered else {
-                tracing::warn!("SAIC login or vehicle discovery unavailable; retrying");
+                tracing::warn!(stage, "SAIC session setup failed; retrying in 60 seconds");
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 continue;
             };

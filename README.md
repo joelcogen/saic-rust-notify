@@ -18,7 +18,11 @@ The executable reads `.env` from its current directory only. Process environment
 variables take precedence, including empty values. Keep credentials in the ignored
 `.env` or `runtime.env`, never in source control. Configuration errors identify
 settings without printing values; logs exclude credentials, vehicle identifiers,
-API responses and dependency diagnostics, including at TRACE.
+API responses and dependency diagnostics, including at TRACE. Session failures log
+the stage (login, discovery, or vehicle_selection), an allowlisted error category,
+and HTTP/SAIC numeric error codes when available. Raw error messages are never
+logged. A vehicle_selection failure means discovery returned no usable matching
+vehicle, an invalid list, or more than 128 entries.
 
 | Variable | Default / requirement |
 | --- | --- |
