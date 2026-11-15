@@ -261,6 +261,19 @@ docker run --rm --name saic-rust-notify \
   saic-rust-notify:local
 ```
 
+To build for an Ubuntu amd64 host, transfer the image over SSH, and replace the
+running container without publishing to a registry, create
+`~/saic-rust-notify/.env` on the host first, then run from this checkout:
+
+```sh
+./scripts/deploy.sh user@server
+```
+
+The script uses the persistent Docker volume `saic-rust-notify-data`, publishes
+HTTP on the host's loopback interface at port 8080, and leaves the host `.env`
+outside the image. Configure the environment file for container use (in
+particular `HTTP_HOST=0.0.0.0` and `HTTP_PORT=8080`).
+
 The final Debian image runs as UID/GID 10001 and contains only the Rust executable
 and base runtime libraries. The `/app/data` volume must persist across container
 replacement; the image creates it with UID/GID 10001 ownership. TLS uses Rustls
