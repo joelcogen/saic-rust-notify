@@ -1062,3 +1062,96 @@ async fn failed_climate_batch_does_not_refresh_or_change_deadline() {
         assert_eq!(*calls.lock().unwrap(), expected);
     }
 }
+
+#[test]
+fn dashboard_fields_decode_without_inventing_missing_states() {
+    let readings: std::collections::BTreeMap<_, _> = vehicle_readings(VehicleStatusResp {
+        basic_vehicle_status: Some(BasicVehicleStatus {
+            driver_door: Some(1),
+            passenger_door: Some(0),
+            rear_left_door: Some(0),
+            rear_right_door: Some(1),
+            bonnet_status: Some(0),
+            boot_status: Some(1),
+            mileage: Some(12345),
+            driver_window: Some(1),
+            passenger_window: Some(0),
+            rear_left_window: Some(0),
+            rear_right_window: Some(1),
+            front_left_tyre_pressure: Some(65),
+            front_right_tyre_pressure: Some(64),
+            rear_left_tyre_pressure: Some(255),
+            rear_right_tyre_pressure: Some(0),
+            second_row_left_seat_heat_level: Some(1),
+            second_row_right_seat_heat_level: Some(0),
+            steering_heat_level: Some(1),
+            engine_status: Some(1),
+            hand_brake: Some(1),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+    .into_iter()
+    .collect();
+    assert_eq!(readings["tyres/frontLeftPressure"], 2.6);
+    assert_eq!(readings["tyres/frontRightPressure"], 2.56);
+    assert!(!readings.contains_key("tyres/rearLeftPressure"));
+    assert!(!readings.contains_key("tyres/rearRightPressure"));
+    for key in [
+        "doors/driver",
+        "doors/rearRight",
+        "doors/boot",
+        "windows/driver",
+        "windows/rearRight",
+        "climate/steeringWheelHeating",
+        "drivetrain/parked",
+    ] {
+        assert_eq!(readings[key], true, "{key}");
+    }
+    for key in [
+        "doors/passenger",
+        "doors/rearLeft",
+        "doors/bonnet",
+        "windows/passenger",
+        "windows/rearLeft",
+    ] {
+        assert_eq!(readings[key], false, "{key}");
+    }
+    assert_eq!(readings["climate/heatedSeatsRearLeftLevel"], 1);
+    assert_eq!(readings["climate/heatedSeatsRearRightLevel"], 0);
+    let unknown = vehicle_readings(VehicleStatusResp {
+        basic_vehicle_status: Some(BasicVehicleStatus {
+            driver_door: Some(2),
+            bonnet_status: Some(255),
+            boot_status: Some(-1),
+            driver_window: Some(0), // incomplete status: no valid mileage
+            second_row_left_seat_heat_level: Some(255),
+            steering_heat_level: Some(99),
+            front_left_tyre_pressure: Some(-1),
+            engine_status: Some(99),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    assert!(unknown.is_empty());
+    for (engine, brake, parked) in [
+        (Some(0), None, Some(true)),
+        (Some(1), Some(0), Some(false)),
+        (Some(1), None, None),
+    ] {
+        let data: std::collections::BTreeMap<_, _> = vehicle_readings(VehicleStatusResp {
+            basic_vehicle_status: Some(BasicVehicleStatus {
+                engine_status: engine,
+                hand_brake: brake,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .into_iter()
+        .collect();
+        assert_eq!(
+            data.get("drivetrain/parked"),
+            parked.map(serde_json::Value::Bool).as_ref()
+        );
+    }
+}

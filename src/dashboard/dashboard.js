@@ -1,0 +1,196 @@
+import {vehicleReadings, display, relativeTime, vehicleState, TOKEN_KEY, loadToken, saveToken} from '/dashboard-model.mjs';
+
+const $ = selector => document.querySelector(selector);
+let storage;
+try { storage = window.localStorage; } catch { /* Browsers can prohibit storage. */ }
+let token = loadToken(storage);
+let snapshot = null;
+let readings = {};
+let busy = false;
+let loading = false;
+let session = 0;
+let unavailable = false;
+let storageWarning = false;
+const commands = [...document.querySelectorAll('[data-action]'), $('#start-climate')];
+
+function message(text, error = false) {
+  $('#message').textContent = text;
+  $('#message').hidden = !text;
+  $('#message').classList.toggle('error', error);
+}
+function showLogin(text = '') {
+  $('#dashboard').hidden = true;
+  $('#forget-token').hidden = true;
+  $('#login').hidden = false;
+  $('#login-message').textContent = text;
+  if ($('#climate-dialog').open) $('#climate-dialog').close();
+  snapshot = null;
+  readings = {};
+  render();
+}
+function showDashboard() {
+  $('#login').hidden = true;
+  $('#dashboard').hidden = false;
+  $('#forget-token').hidden = false;
+  $('#token').value = '';
+}
+function updateButtons() {
+  for (const button of commands) button.disabled = busy || unavailable || snapshot?.ready !== true;
+  $('#refresh').textContent = busy ? '…' : '↻';
+  $('#dashboard').setAttribute('aria-busy', String(busy));
+  // Avoid losing the saved session while an accepted command may still finish.
+  $('#forget-token').disabled = busy;
+}
+function renderTime() {
+  const stamp = readings['vehicle/refresh/lastVehicleState']?.value;
+  $('#updated').textContent = relativeTime(stamp);
+  if (typeof stamp === 'string' && Number.isFinite(Date.parse(stamp))) {
+    $('#updated').dateTime = stamp;
+    $('#updated').title = new Date(stamp).toLocaleString();
+  } else {
+    $('#updated').removeAttribute('datetime');
+    $('#updated').removeAttribute('title');
+  }
+}
+function render() {
+  readings = vehicleReadings(snapshot);
+  for (const element of document.querySelectorAll('[data-reading]')) {
+    const reading = readings[`vehicle/${element.dataset.reading}`];
+    const value = display(reading?.value, element.dataset.format);
+    element.textContent = value;
+    const quality = value === 'Unknown' ? 'unknown' : unavailable || !reading.fresh ? 'stale' : 'fresh';
+    element.dataset.quality = quality;
+    element.title = quality === 'stale' ? 'Last known value · stale' : quality === 'unknown' ? 'No usable reading reported' : 'Fresh vehicle reading';
+  }
+  const state = vehicleState(readings);
+  $('#vehicle-state').textContent = state.text;
+  $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : unavailable || state.stale ? 'stale' : 'fresh';
+  const vehicles = (snapshot?.sources ?? []).filter(source => source.kind === 'vehicle');
+  $('#connection').textContent = unavailable ? 'Unavailable' : !snapshot?.connected ? 'Disconnected' : vehicles.length > 1 ? 'Multiple vehicles' : snapshot.ready ? 'Connected' : 'Not ready';
+  const values = Object.values(readings);
+  $('#freshness').textContent = vehicles.length > 1 ? 'Select one vehicle in service config' : !values.length ? 'No vehicle data yet' : unavailable || !snapshot?.connected || values.some(reading => !reading.fresh) ? 'Last known · stale data' : 'Vehicle data up to date';
+  renderTime();
+  updateButtons();
+}
+async function request(path, method = 'GET', body, credential = token) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method, headers: {Authorization: `Bearer ${credential}`, ...(body === undefined ? {} : {'Content-Type':'application/json'})},
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache:'no-store', credentials:'omit', redirect:'error',
+      signal: AbortSignal.timeout(method === 'POST' ? 370000 : 15000),
+    });
+  } catch {
+    throw new Error(method === 'POST' ? 'Connection lost. The action may have completed. Check vehicle state before trying again.' : 'Cannot reach the service. Reconnecting automatically.');
+  }
+  if (response.status === 401) {
+    const error = new Error('The saved token was rejected. Enter a valid token to reconnect.');
+    error.unauthorized = true;
+    throw error;
+  }
+  if (!response.ok) throw new Error((await response.text()).slice(0, 500) || `Request failed (${response.status}).`);
+  return method === 'GET' ? response.json() : response.text();
+}
+function handleError(error) {
+  unavailable = true;
+  if (error.unauthorized) {
+    token = '';
+    session++;
+    showLogin(error.message);
+    // Keep the persisted value until an explicit replacement/forget, including
+    // during temporary configuration failures. It is never put into the URL.
+  } else {
+    message(error.message, true);
+    render();
+  }
+}
+async function loadStatus(preserveMessage = false) {
+  if (!token || loading || document.hidden) return;
+  loading = true;
+  const generation = session;
+  try {
+    const result = await request('/api/status');
+    if (generation !== session) return;
+    snapshot = result;
+    const recovered = unavailable;
+    unavailable = false;
+    showDashboard();
+    render();
+    if (recovered && !preserveMessage && $('#message').textContent.startsWith('Cannot reach the service.')) {
+      message(storageWarning ? 'Browser storage is unavailable. Your token will only be kept for this visit.' : 'Connection restored.');
+    }
+  } catch (error) {
+    if (generation === session) handleError(error);
+  } finally { loading = false; }
+}
+$('#token-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const candidate = $('#token').value.trim();
+  if (!candidate) return;
+  $('#connect').disabled = true;
+  $('#login-message').textContent = 'Connecting…';
+  const generation = ++session;
+  try {
+    const result = await request('/api/status', 'GET', undefined, candidate);
+    if (generation !== session) return;
+    token = candidate;
+    storageWarning = !saveToken(storage, token);
+    snapshot = result;
+    unavailable = false;
+    showDashboard();
+    message(storageWarning ? 'Browser storage is unavailable. Your token will only be kept for this visit.' : '');
+    render();
+  } catch (error) { $('#login-message').textContent = error.message; }
+  finally { $('#connect').disabled = false; }
+});
+$('#forget-token').addEventListener('click', () => {
+  if (busy) return;
+  token = '';
+  session++;
+  try { storage.removeItem(TOKEN_KEY); } catch { /* Storage unavailable. */ }
+  showLogin();
+  $('#token').focus();
+});
+async function act(path, body) {
+  if (busy || unavailable || snapshot?.ready !== true) return;
+  busy = true;
+  updateButtons();
+  message(path === '/refresh' ? 'Refreshing vehicle data…' : path === '/locate' ? 'Requesting a light flash…' : 'Starting climate. This may take a few minutes…');
+  try {
+    const result = await request(path, 'POST', body);
+    message(result);
+  } catch (error) { handleError(error); }
+  finally {
+    busy = false;
+    updateButtons();
+    // Cached read only, including after uncertain command outcomes. Never replay.
+    await loadStatus(true);
+  }
+}
+for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', () => act(button.dataset.action));
+$('#open-climate').addEventListener('click', () => $('#climate-dialog').showModal());
+$('#close-climate').addEventListener('click', () => $('#climate-dialog').close());
+$('#climate-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const value = $('#temperature').value;
+  const body = value === '' ? undefined : {temperature:Number(value)};
+  if (body && !Number.isFinite(body.temperature)) return;
+  $('#climate-dialog').close();
+  act('/climate/start', body);
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStatus(); });
+window.addEventListener('storage', event => {
+  if ((event.key === TOKEN_KEY || event.key === null) && !busy) {
+    session++;
+    token = loadToken(storage);
+    if (token) loadStatus(); else showLogin();
+  }
+});
+setInterval(() => loadStatus(), 10000);
+setInterval(renderTime, 1000);
+if (token) {
+  showDashboard();
+  render();
+  loadStatus();
+} else showLogin();

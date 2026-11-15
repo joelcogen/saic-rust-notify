@@ -24,7 +24,42 @@ pub fn router(controls: Controls, token: Option<&str>) -> Router {
         .with_state(Api { controls, token })
 }
 async fn handle(State(api): State<Api>, request: Request) -> Response {
-    let mut response = respond(api, request).await;
+    // The public shell contains no vehicle data. API and control routes still
+    // require the bearer token, supplied by the browser after unlocking.
+    let asset = if request.method() == "GET" || request.method() == "HEAD" {
+        match request.uri().path() {
+            "/" | "/dashboard.html" => Some((
+                "text/html; charset=utf-8",
+                include_bytes!("dashboard/index.html").as_slice(),
+            )),
+            "/dashboard.css" => Some((
+                "text/css; charset=utf-8",
+                include_bytes!("dashboard/dashboard.css").as_slice(),
+            )),
+            "/dashboard.js" => Some((
+                "text/javascript; charset=utf-8",
+                include_bytes!("dashboard/dashboard.js").as_slice(),
+            )),
+            "/dashboard-model.mjs" => Some((
+                "text/javascript; charset=utf-8",
+                include_bytes!("dashboard/dashboard-model.mjs").as_slice(),
+            )),
+            "/car.jpg" => Some(("image/jpeg", include_bytes!("dashboard/car.jpg").as_slice())),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mut response = if let Some((mime, bytes)) = asset {
+        let body = if request.method() == "HEAD" {
+            &[][..]
+        } else {
+            bytes
+        };
+        ([(header::CONTENT_TYPE, mime)], body).into_response()
+    } else {
+        respond(api, request).await
+    };
     for (name, value) in [
         ("cache-control", "no-store"),
         ("x-content-type-options", "nosniff"),
@@ -32,7 +67,7 @@ async fn handle(State(api): State<Api>, request: Request) -> Response {
         ("x-frame-options", "DENY"),
         (
             "content-security-policy",
-            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         ),
     ] {
         response.headers_mut().insert(name, value.parse().unwrap());

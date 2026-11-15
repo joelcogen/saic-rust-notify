@@ -350,9 +350,51 @@ fn vehicle_readings(status: VehicleStatusResp) -> Readings {
     for (key, value) in [
         ("doors/locked", b.lock_status),
         ("drivetrain/running", b.engine_status),
+        ("doors/driver", b.driver_door),
+        ("doors/passenger", b.passenger_door),
+        ("doors/rearLeft", b.rear_left_door),
+        ("doors/rearRight", b.rear_right_door),
+        ("doors/bonnet", b.bonnet_status),
+        ("doors/boot", b.boot_status),
+        ("climate/steeringWheelHeating", b.steering_heat_level),
     ] {
         if let Some(v @ 0..=1) = value {
             readings.push((key, json!(v == 1)));
+        }
+    }
+    // Match the gateway's validity guard: door-window flags from incomplete
+    // status packets (missing/invalid mileage) must not look closed.
+    if b.mileage.is_some_and(|v| (1..2147483647).contains(&v)) {
+        for (key, value) in [
+            ("windows/driver", b.driver_window),
+            ("windows/passenger", b.passenger_window),
+            ("windows/rearLeft", b.rear_left_window),
+            ("windows/rearRight", b.rear_right_window),
+        ] {
+            if let Some(v @ 0..=1) = value {
+                readings.push((key, json!(v == 1)));
+            }
+        }
+    }
+    // The reference's parked predicate also considers the handbrake. Preserve
+    // unknown codes instead of assuming that an absent engine state is parked.
+    let parked = match (b.engine_status, b.hand_brake) {
+        (Some(0), _) | (_, Some(1)) => Some(true),
+        (Some(1), Some(0)) => Some(false),
+        _ => None,
+    };
+    if let Some(parked) = parked {
+        readings.push(("drivetrain/parked", json!(parked)));
+    }
+    // SAIC pressure units are 0.04 bar; 255 is unavailable, not 10.2 bar.
+    for (key, value) in [
+        ("tyres/frontLeftPressure", b.front_left_tyre_pressure),
+        ("tyres/frontRightPressure", b.front_right_tyre_pressure),
+        ("tyres/rearLeftPressure", b.rear_left_tyre_pressure),
+        ("tyres/rearRightPressure", b.rear_right_tyre_pressure),
+    ] {
+        if let Some(v @ 1..=254) = value {
+            readings.push((key, json!(v as f64 * 0.04)));
         }
     }
     for (key, value) in [
@@ -363,6 +405,14 @@ fn vehicle_readings(status: VehicleStatusResp) -> Readings {
         (
             "climate/heatedSeatsFrontRightLevel",
             b.front_right_seat_heat_level,
+        ),
+        (
+            "climate/heatedSeatsRearLeftLevel",
+            b.second_row_left_seat_heat_level,
+        ),
+        (
+            "climate/heatedSeatsRearRightLevel",
+            b.second_row_right_seat_heat_level,
         ),
     ] {
         if let Some(v @ 0..=3) = value {

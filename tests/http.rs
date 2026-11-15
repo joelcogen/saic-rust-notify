@@ -69,7 +69,7 @@ async fn call(
     )
 }
 #[tokio::test]
-async fn auth_validation_and_no_dashboard() {
+async fn auth_validation_and_unknown_routes() {
     let (controls, mut rx) = setup().await;
     let app = router(controls.clone(), Some("test-secret"));
     for path in ["/api/status", "/climate/start", "/refresh", "/locate"] {
@@ -93,13 +93,7 @@ async fn auth_validation_and_no_dashboard() {
             401
         );
     }
-    for path in [
-        "/",
-        "/dashboard.html",
-        "/dashboard.css",
-        "/dashboard.js",
-        "/missing",
-    ] {
+    for path in ["/missing", "/src/dashboard/car.jpg", "/dashboard/../.env"] {
         assert_eq!(
             call(
                 app.clone(),
@@ -321,4 +315,74 @@ async fn timed_out_request_is_cancelled_and_ambiguous_vehicles_refuse_controls()
         .select_vehicles(&[BASE.into(), "OTHER".into()]);
     assert!(c.execute("/locate", None).await.is_err());
     assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn public_dashboard_assets_do_not_expose_data_or_bypass_api_auth() {
+    let (controls, mut requests) = setup().await;
+    let app = router(controls.clone(), Some("test-secret"));
+    for (path, mime) in [
+        ("/", "text/html; charset=utf-8"),
+        ("/dashboard.html", "text/html; charset=utf-8"),
+        ("/dashboard.css", "text/css; charset=utf-8"),
+        ("/dashboard.js", "text/javascript; charset=utf-8"),
+        ("/dashboard-model.mjs", "text/javascript; charset=utf-8"),
+        ("/car.jpg", "image/jpeg"),
+    ] {
+        for method in ["GET", "HEAD"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["content-type"], mime);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let policy = response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap();
+            assert!(policy.contains("connect-src 'self'"));
+            assert!(!policy.contains("unsafe-inline"));
+            let bytes = to_bytes(response.into_body(), 2_000_000).await.unwrap();
+            if method == "HEAD" {
+                assert!(bytes.is_empty());
+            } else {
+                assert!(!bytes.is_empty());
+            }
+            assert!(!String::from_utf8_lossy(&bytes).contains("test-secret"));
+        }
+        assert_eq!(call(app.clone(), "POST", path, "", None, None).await.0, 401);
+    }
+    assert_eq!(
+        call(app.clone(), "GET", "/api/status", "", None, None)
+            .await
+            .0,
+        401
+    );
+    assert_eq!(
+        call(
+            app,
+            "GET",
+            "/api/status",
+            "",
+            Some("Bearer test-secret"),
+            None
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        call(router(controls, None), "GET", "/", "", None, None)
+            .await
+            .0,
+        200
+    );
+    assert!(requests.try_recv().is_err());
 }

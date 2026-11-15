@@ -25,7 +25,9 @@ done
 [ "$(docker exec "$container_name" id -g)" = 10001 ]
 docker exec "$container_name" sh -ec 'test -w /app/data && test -f /app/data/polling.json'
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$port/api/status")" = 401 ]
-[ "$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Authorization: Bearer synthetic-smoke-token' "http://$port/dashboard.html")" = 404 ]
+for asset in / /dashboard.html /dashboard.css /dashboard.js /dashboard-model.mjs /car.jpg; do
+  [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$port$asset")" = 200 ]
+done
 docker exec "$container_name" sh -ec '
   for executable in python python3 pip cargo; do
     if command -v "$executable"; then exit 1; fi
@@ -34,4 +36,4 @@ docker exec "$container_name" sh -ec '
 '
 docker stop -t 5 "$container_name" >/dev/null
 [ "$(docker inspect --format '{{.State.ExitCode}}' "$container_name")" = 0 ]
-echo 'Container smoke check passed: non-root, authenticated HTTP, no dashboard/Python assets, graceful shutdown.'
+echo 'Container smoke check passed: non-root, authenticated API, embedded dashboard, no Python, graceful shutdown.'

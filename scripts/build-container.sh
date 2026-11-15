@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stage only manifests and Rust source from the service and sibling client.
+# Stage only manifests and source (with embedded dashboard assets).
 set -eu
 cd "$(dirname "$0")/.."
 build_context=$(mktemp -d)

@@ -3,7 +3,7 @@
 A self-hosted Rust service that reads vehicle telemetry and sends vehicle controls
 directly through the local [`saic-client`](../saic-rust-client) crate. It serves an
 authenticated HTTP API and optional Notify! widgets and Live Activities. No other
-local service is required. The web dashboard remains deferred.
+local service is required. A browser dashboard is served at `/`.
 
 ## Run and configure
 
@@ -29,7 +29,7 @@ API responses and dependency diagnostics, including at TRACE.
 | `STALE_AFTER_SECONDS` | `600`, positive integer up to 4294967295 |
 | `HTTP_HOST` | `127.0.0.1`; bind interface for HTTP |
 | `HTTP_PORT` | `8080`, integer 1–65535 |
-| `CLIMATE_API_TOKEN` | Bearer token; unset/empty rejects every HTTP request |
+| `CLIMATE_API_TOKEN` | Bearer token; unset/empty rejects all API and control requests |
 | `NOTIFY_DASHBOARD_URL` | Optional Notify widget push URL; unset/empty disables it |
 | `NOTIFY_ACTIVITY_URL` | Optional Notify device Live Activity URL; unset/empty disables both activities |
 | `LOG_LEVEL` | `INFO`; ERROR, WARN/WARNING, INFO, DEBUG, TRACE supported |
@@ -106,15 +106,52 @@ last snapshot as stale; successful polls replace it so missing fields cannot be
 revived by a new timestamp. Missing, invalid and unknown measurements are omitted,
 not interpreted as zero or off.
 
-The adapter maps temperatures, cabin climate, seat/rear-window heating, door lock,
-running state, SOC/target, charging/plug state, battery power and remaining charging
+The adapter maps temperatures, cabin climate, front/rear seat heating, steering
+and rear-window heating, locks, individual doors/windows, bonnet, tailgate, tire
+pressures, parked/running state, SOC/target, charging/plug state, power and remaining charging
 time to the existing Notify fields. Protocol scaling is converted to Celsius,
 percent, kW and seconds. API transport, authentication, command payloads and event
 continuation are owned by `saic-client`.
 
+## Web dashboard
+
+Open the service root (for example `http://127.0.0.1:8080/`) and enter your
+`CLIMATE_API_TOKEN`. After validation, it is kept in this browser's localStorage
+and reused across visits without prompting. It is sent only in the same-origin
+Authorization header, never in a URL. **Forget token** removes it from the browser.
+A rejected token requires a replacement; clearing browser storage also clears it.
+If the browser blocks storage, the page explains that persistence is unavailable.
+
+The supplied car image has positioned status pills for tires, doors and windows,
+bonnet/tailgate, front/rear heated seats, steering heat and defrost. The overview
+shows lock, parked/driving/charging, battery, connection and inside/outside
+temperatures. The illustration is left-hand drive; front doors/windows are labeled
+by driver/passenger role, while tires and heated seats are physical left/right.
+Missing or unsupported readings display **Unknown**. Stale readings stay visible
+in amber; multiple vehicles are never combined. Select `SAIC_VIN` for a single
+vehicle dashboard when an account contains more than one car.
+
+The top timestamp is the stored vehicle observation time, shown as an updating
+“ago” age. The browser reads cached status every ten seconds while visible; those
+reads never poll or wake the car. **Refresh** requests a live poll, **Locate** on
+the hood flashes lights, and **Climate** at the dash opens the automatic-climate
+control. Its optional ambient temperature override chooses the existing heating
+routine, not the cabin target. These are all three service control endpoints;
+other labels show status. Commands are disabled while one is running or the
+service is unavailable, and errors/uncertain outcomes are never retried automatically.
+
+The shell, stylesheet, scripts and image are public, contain no account data,
+and are embedded in the executable. All telemetry and actions require the token.
+No JavaScript build step, external fonts, CDN, or runtime asset directory is needed.
+
+Telemetry conversion follows the [upstream vehicle publisher](https://github.com/SAIC-iSmart-API/saic-python-mqtt-gateway/blob/master/src/status_publisher/vehicle/basic_vehicle_status.py):
+tire units are 0.04 bar (0 and 255 are unavailable), and door-window flags require
+valid mileage to exclude incomplete packets. Unknown status codes are omitted.
+Parked status considers engine and handbrake; missing inputs do not imply parked.
+
 ## HTTP API
 
-All requests require `Authorization: Bearer <CLIMATE_API_TOKEN>`. Token digests
+All API and control requests require `Authorization: Bearer <CLIMATE_API_TOKEN>`. Token digests
 are compared in constant time. Responses include no-store, nosniff, no-referrer,
 frame denial and restrictive Content Security Policy headers. Use a trusted TLS
 reverse proxy for access beyond loopback; this listener speaks HTTP.
@@ -149,7 +186,7 @@ deadlines unchanged. Controls are mutually exclusive.
 
 Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
 malformed JSON, unknown keys and bodies on status/refresh/locate return 400.
-Authentication failures return 401; unknown routes (including dashboard assets)
+Authentication failures return 401; authenticated requests to unknown routes
 return 404. Unavailability, rejection, partial failure and uncertain outcomes
 return 503 with redacted messages. Unavailable session/discovery, ambiguous
 vehicle selection and missing fresh climate temperature have distinct errors.
@@ -177,7 +214,7 @@ TLS uses Rustls and bundled public trust roots (no Python or OpenSSL runtime).
   refreshes unchanged payloads every five minutes. It includes SOC, doors,
   charging/plugged/driving/parked status, inside/outside temperature and A/C.
   Cached values remain visible with `Last known / stale` when required readings
-  are stale or disconnected. The widget is unrelated to the deferred web dashboard.
+  are stale or disconnected. The widget is separate from the browser dashboard.
 - `Charging Big Red` discovers an existing activity by title, then checks every
   30 seconds. Only fresh charging data drives updates and completion. The payload
   includes SOC progress, absolute power in kW and remaining seconds (capped at
@@ -209,7 +246,7 @@ commands to recover a notification.
 
 ## Container deployment
 
-The build helper stages only Cargo manifests and Rust source from this repository
+The build helper stages only Cargo manifests and source (including dashboard assets) from this repository
 and the sibling Rust client, excluding credentials and other local files. The
 staged build context also uses an allowlist. Run the helper from this checkout;
 a bare `docker build .` does not contain the required sibling source.
@@ -246,7 +283,18 @@ cargo fmt --check
 cargo check --locked
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+node tests/dashboard.test.mjs
+node tests/dashboard-interactions.test.mjs
 ```
+
+For a synthetic dashboard preview with no SAIC access:
+
+```sh
+cargo run --locked --offline --example dashboard_preview
+```
+
+Visit `http://127.0.0.1:8099/` with token `demo-token`. All displayed data and
+actions in this preview are simulated. Never run the main service for UI testing.
 
 Container verification uses synthetic credentials and an unreachable loopback
 HTTPS API address, and never sends vehicle controls (requires Docker and curl):

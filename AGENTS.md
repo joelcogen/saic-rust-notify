@@ -4,7 +4,7 @@ This project is a Rust rewrite of the Python service in
 [`../saic-mqtt-service`](../saic-mqtt-service). Use that directory as the
 behavioral reference for MQTT telemetry handling, freshness, HTTP endpoints,
 vehicle commands, Notify! widgets and Live Activities, configuration, and
-deployment. Preserve its features except the web dashboard, which is deferred.
+deployment. Preserve its features. The web dashboard is served by this service.
 
 Use the local SAIC Rust client in [`../saic-rust-client`](../saic-rust-client)
 for SAIC API/domain behavior where applicable; do not duplicate its
@@ -16,8 +16,8 @@ Use synthetic fixtures for tests. Do not contact SAIC production or a vehicle
 unless the user explicitly requests that specific check; available credentials
 do not grant permission. Do not start vehicle actions as part of development.
 
-Keep the service configuration and documentation aligned with behavior. Do not
-add or serve the deferred web dashboard unless the user asks for it.
+Keep the service configuration and documentation aligned with behavior. Keep
+dashboard assets self-contained and vehicle data/actions behind bearer auth.
 
 The runtime now uses `saic-client` directly for login, discovery, telemetry reads
 and commands. The Python service and MQTT gateway are rewrite references only;
