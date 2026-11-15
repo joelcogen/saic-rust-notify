@@ -6,7 +6,7 @@ use crate::{
     telemetry::{Message, SharedTelemetry, Source},
 };
 use saic_client::{
-    models::{ChrgMgmtDataResp, VehicleListResp, VehicleStatusResp},
+    models::{ChrgMgmtDataResp, VehicleListResp, VehicleStatusCacheResp, VehicleStatusResp},
     ClientConfig, Command, CommandOptions, CommandState, Credentials, FindCarMode, SaicClient,
 };
 use serde_json::{json, Value};
@@ -35,6 +35,7 @@ pub struct Request {
 trait Session {
     async fn login(&mut self) -> Result<(), ()>;
     async fn vehicles(&mut self) -> Result<VehicleListResp, ()>;
+    async fn cached(&mut self, vin: &str) -> Result<VehicleStatusCacheResp, ()>;
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()>;
     async fn charge(&mut self, vin: &str) -> Result<ChrgMgmtDataResp, ()>;
     async fn command(&mut self, vin: &str, command: &Command) -> Result<CommandState, ()>;
@@ -49,6 +50,11 @@ impl Session for SaicClient {
         SaicClient::vehicles(self)
             .await
             .map_err(|error| log_session_error("discovery", &error))
+    }
+    async fn cached(&mut self, vin: &str) -> Result<VehicleStatusCacheResp, ()> {
+        self.vehicle_status_cached(vin, CommandOptions::default())
+            .await
+            .map_err(|error| log_session_error("cache", &error))
     }
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()> {
         self.vehicle_status_live(vin, CommandOptions::default())
@@ -183,6 +189,11 @@ async fn worker(
                 // sources and observation ages still govern freshness.
                 state.set_connected(true);
             }
+            for vin in &vins {
+                if let Ok(cached) = client.cached(vin).await {
+                    seed_cached(state, vin, cached).await;
+                }
+            }
             authenticated = true;
         }
         let due = vins
@@ -301,6 +312,47 @@ async fn execute(
         }
     }
     Ok(message)
+}
+
+// Cache reads do not change polling deadlines or request charging/live data.
+async fn seed_cached(state: &SharedTelemetry, vin: &str, cached: VehicleStatusCacheResp) {
+    let stamp = cached.status_time.filter(|stamp| {
+        !matches!(*stamp, 0 | 2_147_483_647)
+            && chrono::DateTime::from_timestamp(*stamp, 0).is_some()
+    });
+    let source = Source::Vehicle(vin.into());
+    let mut state = state.write().await;
+    if let Some(previous) = state
+        .latest(&source, "vehicle/refresh/lastVehicleState")
+        .and_then(|r| r.value.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+    {
+        if stamp.is_none_or(|stamp| stamp <= previous.timestamp()) {
+            return;
+        }
+    }
+    let readings = vehicle_readings(VehicleStatusResp {
+        basic_vehicle_status: cached.basic_vehicle_status,
+        gps_position: cached.gps_position,
+        status_time: stamp,
+        ..Default::default()
+    });
+    if readings.is_empty() {
+        return;
+    }
+    state.clear_vehicle(vin);
+    let now = Instant::now();
+    for (key, value) in readings {
+        let _ = state.ingest(
+            Message {
+                source: source.clone(),
+                key: format!("vehicle/{key}"),
+                value,
+            },
+            true,
+            now,
+        );
+    }
 }
 
 async fn refresh(

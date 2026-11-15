@@ -92,14 +92,18 @@ Unreadable/corrupt state or write failures stop vehicle access rather than silen
 resetting history. On first start without history, each vehicle is read once; an
 inactive observation starts the 48-hour window at that observation because its
 prior parking age is unknown. On restart with history, saved deadlines still
-apply, and telemetry remains empty until the next scheduled or explicit refresh.
+apply, and the SAIC cache supplies initial telemetry when available.
 
 ### Telemetry and freshness
 
 `GET /api/status` preserves the `vehicle/...` reading keys used by Notify!, such
 as `vehicle/climate/interiorTemperature`. Each source is a VIN; multiple vehicles
 remain isolated. Ambiguous flattened keys are prefixed with their source.
-Snapshots are in memory and are lost at restart.
+Snapshots are in memory and are lost at restart. After login and discovery, the
+service fetches each vehicle’s SAIC cache without requesting a live refresh.
+Cached readings are displayed regardless of age with their original timestamp;
+internal freshness checks still govern controls and notifications. Empty or failed
+cache reads do not trigger a live fallback or change polling deadlines.
 
 Vehicle readings use the API's UTC `statusTime`: old, future or absent timestamps
 cannot certify freshness. Their `retained` flag is true to indicate that the API
@@ -131,8 +135,7 @@ bonnet/tailgate, front/rear heated seats, steering heat and defrost. The overvie
 shows lock, parked/driving/charging, battery, connection and inside/outside
 temperatures. The illustration is left-hand drive; front doors/windows are labeled
 by driver/passenger role, while tires and heated seats are physical left/right.
-Missing or unsupported readings display **Unknown**. Stale readings stay visible
-in amber; multiple vehicles are never combined. Select `SAIC_VIN` for a single
+Missing or unsupported readings display **Unknown**. Last known readings stay visible with their observation timestamp; multiple vehicles are never combined. Select `SAIC_VIN` for a single
 vehicle dashboard when an account contains more than one car.
 
 The top timestamp is the stored vehicle observation time, shown as an updating

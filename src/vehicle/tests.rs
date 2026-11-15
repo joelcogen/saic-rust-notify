@@ -15,6 +15,8 @@ struct Fake {
     outcomes: VecDeque<Result<CommandState, ()>>,
     login_failures: usize,
     discovery_failures: usize,
+    cached: VehicleStatusCacheResp,
+    cache_calls: Arc<Mutex<usize>>,
     read_failure: bool,
     read_failures: usize,
     vehicle_calls: Arc<Mutex<Vec<String>>>,
@@ -30,6 +32,8 @@ impl Default for Fake {
             outcomes: Default::default(),
             login_failures: 0,
             discovery_failures: 0,
+            cached: Default::default(),
+            cache_calls: Default::default(),
             read_failure: false,
             read_failures: 0,
             vehicle_calls: Default::default(),
@@ -75,6 +79,10 @@ impl Session for Fake {
             ),
             ..Default::default()
         })
+    }
+    async fn cached(&mut self, _: &str) -> Result<VehicleStatusCacheResp, ()> {
+        *self.cache_calls.lock().unwrap() += 1;
+        Ok(self.cached.clone())
     }
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()> {
         self.calls.lock().unwrap().push("vehicle".into());
@@ -735,7 +743,7 @@ async fn http_request(
 }
 
 #[tokio::test(start_paused = true)]
-async fn restart_allows_authenticated_http_refresh_before_saved_deadline_without_telemetry() {
+async fn restart_seeds_cache_without_live_reads_before_saved_deadline() {
     let now = chrono::Utc::now().timestamp();
     let parked = now - schedule::WINDOW;
     let path = std::env::temp_dir().join(format!("refresh-readiness-{}.json", std::process::id()));
@@ -751,7 +759,14 @@ async fn restart_allows_authenticated_http_refresh_before_saved_deadline_without
     let mut schedules = Schedules::open(path.clone()).unwrap();
     let deadline = schedules.vehicle("SYNTHETIC").due();
     assert_eq!(deadline, now + schedule::DAY);
-    let mut fake = Fake::default();
+    let mut fake = Fake {
+        cached: VehicleStatusCacheResp {
+            status_time: Some(now - 86400),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let cache_calls = fake.cache_calls.clone();
     let calls = fake.calls.clone();
     let shared = state();
     let (controls, rx) = crate::controls::Controls::new(shared.clone(), Duration::from_secs(600));
@@ -768,7 +783,17 @@ async fn restart_allows_authenticated_http_refresh_before_saved_deadline_without
     assert_eq!(status["connected"], true);
     assert_eq!(status["ready"], true);
     assert_eq!(status["sources"].as_array().unwrap().len(), 1);
-    assert_eq!(status["readings"], json!({}));
+    assert_eq!(*cache_calls.lock().unwrap(), 1);
+    assert_eq!(
+        status["readings"]["vehicle/refresh/lastVehicleState"]["fresh"],
+        false
+    );
+    assert_eq!(
+        status["readings"]["vehicle/refresh/lastVehicleState"]["value"],
+        chrono::DateTime::from_timestamp(now - 86400, 0)
+            .unwrap()
+            .to_rfc3339()
+    );
     assert_eq!(
         http_request(&controls, "POST", "/refresh", false).await.0,
         401
@@ -1154,4 +1179,52 @@ fn dashboard_fields_decode_without_inventing_missing_states() {
             parked.map(serde_json::Value::Bool).as_ref()
         );
     }
+}
+
+#[tokio::test]
+async fn cached_snapshot_keeps_old_timestamp_and_internal_freshness() {
+    let shared = state();
+    shared.write().await.set_connected(true);
+    let stamp = chrono::Utc::now().timestamp() - 86400;
+    seed_cached(
+        &shared,
+        "SYNTHETIC",
+        VehicleStatusCacheResp {
+            status_time: Some(stamp),
+            basic_vehicle_status: Some(BasicVehicleStatus {
+                engine_status: Some(1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await;
+    let snapshot =
+        shared
+            .read()
+            .await
+            .snapshot(Instant::now(), chrono::Utc::now(), Duration::from_secs(600));
+    let reading = &snapshot["readings"]["vehicle/refresh/lastVehicleState"];
+    assert_eq!(
+        reading["value"],
+        chrono::DateTime::from_timestamp(stamp, 0)
+            .unwrap()
+            .to_rfc3339()
+    );
+    assert_eq!(reading["fresh"], false);
+    seed_cached(
+        &shared,
+        "SYNTHETIC",
+        VehicleStatusCacheResp {
+            status_time: Some(stamp - 3600),
+            ..Default::default()
+        },
+    )
+    .await;
+    let after =
+        shared
+            .read()
+            .await
+            .snapshot(Instant::now(), chrono::Utc::now(), Duration::from_secs(600));
+    assert_eq!(snapshot["readings"], after["readings"]);
 }

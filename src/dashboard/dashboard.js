@@ -58,17 +58,17 @@ function render() {
     const reading = readings[`vehicle/${element.dataset.reading}`];
     const value = display(reading?.value, element.dataset.format);
     element.textContent = value;
-    const quality = value === 'Unknown' ? 'unknown' : unavailable || !reading.fresh ? 'stale' : 'fresh';
+    const quality = value === 'Unknown' ? 'unknown' : 'known';
     element.dataset.quality = quality;
-    element.title = quality === 'stale' ? 'Last known value · stale' : quality === 'unknown' ? 'No usable reading reported' : 'Fresh vehicle reading';
+    element.title = quality === 'unknown' ? 'No usable reading reported' : 'Last known vehicle reading';
   }
   const state = vehicleState(readings);
   $('#vehicle-state').textContent = state.text;
-  $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : unavailable || state.stale ? 'stale' : 'fresh';
+  $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : 'known';
   const vehicles = (snapshot?.sources ?? []).filter(source => source.kind === 'vehicle');
   $('#connection').textContent = unavailable ? 'Unavailable' : !snapshot?.connected ? 'Disconnected' : vehicles.length > 1 ? 'Multiple vehicles' : snapshot.ready ? 'Connected' : 'Not ready';
   const values = Object.values(readings);
-  $('#freshness').textContent = vehicles.length > 1 ? 'Select one vehicle in service config' : !values.length ? 'No vehicle data yet' : unavailable || !snapshot?.connected || values.some(reading => !reading.fresh) ? 'Last known · stale data' : 'Vehicle data up to date';
+  $('#freshness').textContent = vehicles.length > 1 ? 'Select one vehicle in service config' : !values.length ? 'No vehicle data yet' : 'Last known vehicle data';
   renderTime();
   updateButtons();
 }
