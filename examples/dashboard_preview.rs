@@ -28,7 +28,6 @@ async fn main() {
             ("drivetrain/charging", json!(false)),
             ("drivetrain/soc", json!(78)),
             ("climate/interiorTemperature", json!(18)),
-            ("climate/exteriorTemperature", json!(9)),
             ("climate/remoteClimateState", json!("off")),
             ("climate/frontWindowDefrosterHeating", json!(false)),
             ("climate/rearWindowDefrosterHeating", json!(false)),

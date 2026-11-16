@@ -127,7 +127,6 @@ fn payload_contracts_and_url_validation() {
         ("doors/locked", "true"),
         ("drivetrain/charging", "true"),
         ("climate/interiorTemperature", "5"),
-        ("climate/exteriorTemperature", "-2"),
         ("climate/remoteClimateState", "on"),
         ("climate/heatedSeatsFrontRightLevel", "3"),
         ("climate/rearWindowDefrosterHeating", "true"),
@@ -137,7 +136,7 @@ fn payload_contracts_and_url_validation() {
         json!({"trailing":"52%","metrics":[
         {"color":"#22C55E","label":"Doors","value":"Locked"},
         {"color":"#22C55E","label":"Status","value":"Charging"},
-        {"color":"#22C55E","label":"Temperature","value":"5º • -2º"},
+        {"color":"#22C55E","label":"Inside","value":"5º"},
         {"color":"#22C55E","label":"A/C","value":"On"}],"status":"Updated at 13/11/2026 14:32"})
     );
     assert_eq!(
@@ -564,7 +563,6 @@ async fn widget_keeps_source_time_when_stale_disconnected_or_resent() {
         ("doors/locked", "true"),
         ("drivetrain/charging", "false"),
         ("climate/interiorTemperature", "20"),
-        ("climate/exteriorTemperature", "18"),
         ("climate/remoteClimateState", "off"),
     ] {
         state

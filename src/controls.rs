@@ -61,21 +61,16 @@ impl Controls {
         let temperature = if path == "/climate/start" && temperature.is_none() {
             let source = Source::Vehicle(vin.clone());
             Some(
-                ["interior", "exterior"]
-                    .iter()
-                    .filter_map(|side| {
-                        state
-                            .fresh(
-                                &source,
-                                &format!("vehicle/climate/{side}Temperature"),
-                                Instant::now(),
-                                Utc::now(),
-                                self.ttl,
-                            )
-                            .and_then(|v| parse_temperature(v).ok())
-                    })
-                    .reduce(f64::min)
-                    .ok_or("Fresh vehicle temperature is unavailable")?,
+                state
+                    .fresh(
+                        &source,
+                        "vehicle/climate/interiorTemperature",
+                        Instant::now(),
+                        Utc::now(),
+                        self.ttl,
+                    )
+                    .and_then(|v| parse_temperature(v).ok())
+                    .ok_or("Fresh interior temperature is unavailable")?,
             )
         } else {
             temperature

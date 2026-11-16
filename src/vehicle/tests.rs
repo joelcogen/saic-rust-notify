@@ -309,7 +309,7 @@ fn missing_unknown_and_invalid_measurements_do_not_become_off_or_zero() {
     let readings = vehicle_readings(VehicleStatusResp {
         basic_vehicle_status: Some(BasicVehicleStatus {
             interior_temperature: Some(87),
-            exterior_temperature: Some(128),
+            exterior_temperature: Some(12),
             remote_climate_status: Some(99),
             lock_status: Some(99),
             ..Default::default()
@@ -800,7 +800,7 @@ async fn restart_seeds_cache_without_live_reads_before_saved_deadline() {
     );
     assert_eq!(
         controls.execute("/climate/start", None).await,
-        Err("Fresh vehicle temperature is unavailable")
+        Err("Fresh interior temperature is unavailable")
     );
     assert_eq!(*calls.lock().unwrap(), vec!["login", "discovery"]);
     assert_eq!(
@@ -926,7 +926,7 @@ async fn failed_explicit_refresh_restores_readiness_but_not_freshness_after_relo
             drop(state);
             assert_eq!(
                 controls.execute("/climate/start", None).await,
-                Err("Fresh vehicle temperature is unavailable")
+                Err("Fresh interior temperature is unavailable")
             );
         }
         assert_eq!(

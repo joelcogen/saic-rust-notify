@@ -29,7 +29,7 @@ gateway's `src/status_publisher/vehicle/basic_vehicle_status.py`,
 - Battery current is raw × 0.05 − 1000 A, voltage raw × 0.25 V; power is kW.
 - Remaining charging time is minutes converted to seconds.
 - Charging states 1, 3, 10 and 12 indicate charging; unknown codes remain unknown.
-- Temperatures are already Celsius; 87 and values outside −127–127 are invalid.
+- Interior temperature is already Celsius; 87 and values outside −127–127 are invalid.
 - Climate codes 0/1/2/5 mean off/ventilation/on/front defrost.
 
 Unlike the previous stream, a successful direct poll replaces its vehicle snapshot:

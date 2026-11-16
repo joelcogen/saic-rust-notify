@@ -269,7 +269,7 @@ async fn refresh_locate_and_temperature_selection() {
                 .unwrap()
                 .unwrap(),
             false,
-            Instant::now() - Duration::from_secs(601),
+            Instant::now(),
         )
         .unwrap();
     let caller = c.clone();
@@ -278,6 +278,26 @@ async fn refresh_locate_and_temperature_selection() {
     assert!(matches!(request.action, Action::Climate(5.)));
     request.reply.send(Ok("done")).unwrap();
     task.await.unwrap().unwrap();
+    // Even a fresh exterior reading cannot replace a missing interior reading.
+    c.state
+        .write()
+        .await
+        .ingest(
+            decode(
+                &format!("{BASE}/climate/interiorTemperature"),
+                b"unknown",
+                None,
+            )
+            .unwrap()
+            .unwrap(),
+            false,
+            Instant::now(),
+        )
+        .unwrap();
+    assert_eq!(
+        c.execute("/climate/start", None).await,
+        Err("Fresh interior temperature is unavailable")
+    );
     c.state.write().await.set_connected(false);
     for path in ["/refresh", "/locate", "/climate/start"] {
         assert!(c.execute(path, Some(2.)).await.is_err());

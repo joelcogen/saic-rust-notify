@@ -114,7 +114,7 @@ last snapshot as stale; successful polls replace it so missing fields cannot be
 revived by a new timestamp. Missing, invalid and unknown measurements are omitted,
 not interpreted as zero or off.
 
-The adapter maps temperatures, cabin climate, front/rear seat heating, steering
+The adapter maps interior temperature, cabin climate, front/rear seat heating, steering
 and rear-window heating, locks, individual doors/windows, bonnet, tailgate, tire
 pressures, parked/running state, SOC/target, charging/plug state, power and remaining charging
 time to the existing Notify fields. Protocol scaling is converted to Celsius,
@@ -128,14 +128,13 @@ Open the service root (for example `http://127.0.0.1:8080/`) and enter your
 and reused across visits without prompting. It is sent only in the same-origin
 Authorization header, never in a URL. Clear this site’s browser data to remove the saved token.
 The dashboard is titled **Big Red**, with vehicle data age and refresh in the header,
-a combined status and vehicle card, and inside/outside cabin temperatures.
+a combined status and vehicle card, and interior temperature beside the climate control.
 A rejected token requires a replacement; clearing browser storage also clears it.
 If the browser blocks storage, the page explains that persistence is unavailable.
 
 The supplied car image has positioned status pills for tires, doors and windows,
 bonnet/tailgate, front/rear heated seats, steering heat and defrost. The overview
-shows lock, parked/driving/charging, battery, connection and inside/outside
-temperatures. The illustration is left-hand drive; front doors/windows are labeled
+shows lock, parked/driving/charging, battery and connection. The illustration is left-hand drive; front doors/windows are labeled
 by driver/passenger role, while tires and heated seats are physical left/right.
 Missing or unsupported readings display **Unknown**. Last known readings stay visible with their observation timestamp; multiple vehicles are never combined. Select `SAIC_VIN` for a single
 vehicle dashboard when an account contains more than one car.
@@ -144,7 +143,7 @@ The top timestamp is the stored vehicle observation time, shown as an updating
 “ago” age. The browser reads cached status every ten seconds while visible; those
 reads never poll or wake the car. **Refresh** requests a live poll, **Locate** on
 the hood flashes lights, and **Climate** at the dash opens the automatic-climate
-control. Its optional ambient temperature override chooses the existing heating
+control. Its optional interior temperature override chooses the existing heating
 routine, not the cabin target. These are all three service control endpoints;
 other labels show status. Commands are disabled while one is running or the
 service is unavailable, and errors/uncertain outcomes are never retried automatically.
@@ -171,7 +170,7 @@ reverse proxy for access beyond loopback; this listener speaks HTTP.
   retain `value`, `retained` and `fresh`, plus isolated `sources`.
 - `POST /climate/start`: optional JSON object with only `temperature`. Numbers
   are Celsius; text supports decimal comma, signs and optional °C/°F. Without an
-  override, the lower fresh interior/exterior temperature is used; neither fresh
+  override, the fresh interior temperature is used; an unavailable or stale reading
   means 503. This input selects heating behavior, not the A/C target temperature.
 - `POST /refresh`: explicitly read live vehicle and charging state; return 202
   after the refreshed snapshot is stored, or 503 on failure. Available immediately
@@ -221,7 +220,7 @@ TLS uses Rustls and bundled public trust roots (no Python or OpenSSL runtime).
 
 - The dashboard widget checks every five seconds, sends changed payloads and
   refreshes unchanged payloads every five minutes. It includes SOC, doors,
-  charging/plugged/driving/parked status, inside/outside temperature and A/C.
+  charging/plugged/driving/parked status, interior temperature and A/C.
   Cached values remain visible with `Last known / stale` when required readings
   are stale or disconnected. The widget is separate from the browser dashboard.
 - `Charging Big Red` discovers an existing activity by title, then checks every

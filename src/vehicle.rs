@@ -424,13 +424,11 @@ fn vehicle_readings(status: VehicleStatusResp) -> Readings {
     let Some(b) = status.basic_vehicle_status else {
         return readings;
     };
-    for (key, value) in [
-        ("climate/interiorTemperature", b.interior_temperature),
-        ("climate/exteriorTemperature", b.exterior_temperature),
-    ] {
-        if let Some(v) = value.filter(|v| (-127..=127).contains(v) && *v != 87) {
-            readings.push((key, json!(v)));
-        }
+    if let Some(v) = b
+        .interior_temperature
+        .filter(|v| (-127..=127).contains(v) && *v != 87)
+    {
+        readings.push(("climate/interiorTemperature", json!(v)));
     }
     for (key, value) in [
         ("doors/locked", b.lock_status),

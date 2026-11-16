@@ -37,7 +37,7 @@
             <div class="pin tyre front-left"><span>Front left</span><strong data-reading="tyres/frontLeftPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin tyre front-right"><span>Front right</span><strong data-reading="tyres/frontRightPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin front-defrost pill"><span>Front defrost</span><strong data-reading="climate/frontWindowDefrosterHeating" data-format="on">Unknown</strong></div>
-            <button class="pin climate-control dark-button" id="open-climate"><span aria-hidden="true">❄</span> Climate <b data-reading="climate/remoteClimateState" data-format="climate">Unknown</b><span aria-hidden="true">›</span></button>
+            <button class="pin climate-control dark-button" id="open-climate"><span aria-hidden="true">❄</span> Climate <b data-reading="climate/remoteClimateState" data-format="climate">Unknown</b><span class="climate-temperature">Inside <b data-reading="climate/interiorTemperature" data-format="temperature">Unknown</b></span><span aria-hidden="true">›</span></button>
             <div class="pin steering pill"><span>Steering heat</span><strong data-reading="climate/steeringWheelHeating" data-format="on">Unknown</strong></div>
             <div class="pin door door-fl"><span>Driver</span><div>Door <b data-reading="doors/driver" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/driver" data-format="open">Unknown</b></div></div>
             <div class="pin door door-fr"><span>Passenger</span><div>Door <b data-reading="doors/passenger" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/passenger" data-format="open">Unknown</b></div></div>
@@ -52,10 +52,6 @@
             <div class="pin rear-defrost pill"><span>Rear defrost</span><strong data-reading="climate/rearWindowDefrosterHeating" data-format="on">Unknown</strong></div>
             <div class="pin tailgate pill"><span>Tailgate</span><strong data-reading="doors/boot" data-format="open">Unknown</strong></div>
           </div>
-          <aside class="cabin-panel" aria-label="Cabin information">
-            <span class="eyebrow">CABIN COMFORT</span>
-            <div class="temperatures"><div><span>Inside</span><strong data-reading="climate/interiorTemperature" data-format="temperature">Unknown</strong></div><div><span>Outside</span><strong data-reading="climate/exteriorTemperature" data-format="temperature">Unknown</strong></div></div>
-          </aside>
         </div>
       </div>
     </section>
@@ -63,7 +59,7 @@
   <dialog id="climate-dialog" aria-labelledby="climate-title">
     <div class="dialog-heading"><span class="eyebrow">CABIN COMFORT</span><button id="close-climate" class="round-button" aria-label="Close climate controls">×</button></div>
     <h2 id="climate-title">Get comfortable.</h2><p>Start automatic climate at 22°C, or front defrost when it’s 4°C or colder. Seat and steering heat join in at 6°C or colder, rear defrost at 4°C.</p>
-    <form id="climate-form"><label for="temperature">Ambient temperature override <span>(optional)</span></label><input id="temperature" type="number" step="any" placeholder="Use the lower inside / outside reading" aria-describedby="temperature-help"><p id="temperature-help" class="fine-print">Ambient °C selects the heating routine. It is not a cabin target temperature.</p><button class="primary" id="start-climate" type="submit">Start climate</button></form>
+    <form id="climate-form"><label for="temperature">Interior temperature override <span>(optional)</span></label><input id="temperature" type="number" step="any" placeholder="Use the interior reading" aria-describedby="temperature-help"><p id="temperature-help" class="fine-print">Interior °C selects the heating routine. It is not a cabin target temperature.</p><button class="primary" id="start-climate" type="submit">Start climate</button></form>
   </dialog>
 </body>
 </html>

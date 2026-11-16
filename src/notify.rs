@@ -87,7 +87,6 @@ impl Readings {
             "drivetrain/running",
             "doors/locked",
             "climate/interiorTemperature",
-            "climate/exteriorTemperature",
             "climate/remoteClimateState",
             "climate/heatedSeatsFrontLeftLevel",
             "climate/heatedSeatsFrontRightLevel",
@@ -133,7 +132,6 @@ fn dashboard(r: &Readings) -> Value {
     let get = |k: &str| r.latest.get(k);
     let soc = number(get("drivetrain/soc"));
     let temp = number(get("climate/interiorTemperature"));
-    let outside = number(get("climate/exteriorTemperature"));
     let locked = boolean(get("doors/locked"));
     let charging = boolean(get("drivetrain/charging"));
     let ac = get("climate/remoteClimateState")
@@ -152,17 +150,12 @@ fn dashboard(r: &Readings) -> Value {
         "doors/locked",
         "drivetrain/charging",
         "climate/interiorTemperature",
-        "climate/exteriorTemperature",
         "climate/remoteClimateState",
     ]
     .iter()
     .any(|k| !r.fresh.contains_key(*k));
-    let unavailable = soc.is_none()
-        || temp.is_none()
-        || outside.is_none()
-        || locked.is_none()
-        || charging.is_none()
-        || ac.is_none();
+    let unavailable =
+        soc.is_none() || temp.is_none() || locked.is_none() || charging.is_none() || ac.is_none();
     let freshness = match r.updated_at {
         None if r.latest.is_empty() => "No data yet".to_owned(),
         None => "Telemetry unavailable".to_owned(),
@@ -183,7 +176,7 @@ fn dashboard(r: &Readings) -> Value {
     json!({"trailing": rounded(soc, "%"), "metrics": [
         {"color": "#22C55E", "label": "Doors", "value": locked.map_or("?", |v| if v {"Locked"} else {"Unlocked"})},
         {"color": "#22C55E", "label": "Status", "value": status},
-        {"color": "#22C55E", "label": "Temperature", "value": format!("{} • {}", rounded(temp,"º"), rounded(outside,"º"))},
+        {"color": "#22C55E", "label": "Inside", "value": rounded(temp,"º")},
         {"color": "#22C55E", "label": "A/C", "value": ac.map_or("?", |v| if v {"On"} else {"Off"})}],
         "status": freshness})
 }

@@ -92,7 +92,7 @@ test('actions use POST once, lock buttons and update only from cached status',as
   assert.equal(h.calls.at(-1).options.method,'GET');
   assert.equal(h.nodes.get('#message').textContent,'Demo lights flashed');
 });
-test('climate dialog sends ambient override only after explicit start',async()=>{
+test('climate dialog sends interior override only after explicit start',async()=>{
   const h=harness({stored:'synthetic-token'});
   await settle();
   h.nodes.get('#open-climate').trigger('click');
