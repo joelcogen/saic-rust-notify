@@ -126,7 +126,9 @@ continuation are owned by `saic-client`.
 Open the service root (for example `http://127.0.0.1:8080/`) and enter your
 `CLIMATE_API_TOKEN`. After validation, it is kept in this browser's localStorage
 and reused across visits without prompting. It is sent only in the same-origin
-Authorization header, never in a URL. **Forget token** removes it from the browser.
+Authorization header, never in a URL. Clear this site’s browser data to remove the saved token.
+The dashboard is titled **Big Red**, with vehicle data age and refresh in the header,
+a combined status and vehicle card, and inside/outside cabin temperatures.
 A rejected token requires a replacement; clearing browser storage also clears it.
 If the browser blocks storage, the page explains that persistence is unavailable.
 

@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f5f5f3">
-  <title>My vehicle · SAIC</title>
+  <title>Big Red</title>
   <link rel="stylesheet" href="/dashboard.css">
   <script type="module" src="/dashboard.js"></script>
 </head>
 <body>
   <main>
-    <header class="masthead"><a class="brand" href="/" aria-label="SAIC vehicle home"><span class="brand-mark">S</span> SAIC <span class="brand-sub">/ MY VEHICLE</span></a><button id="forget-token" class="text-button" hidden>Forget token</button></header>
+    <header class="masthead">
+      <h1 id="dashboard-title"><a class="brand" href="/">Big Red</a></h1>
+      <div id="refresh-group" class="refresh-group" hidden><div><span class="small-label">Vehicle data</span><time id="updated">No data yet</time></div><button id="refresh" class="round-button" data-action="/refresh" aria-label="Refresh vehicle data" title="Poll the vehicle now">↻</button></div>
+    </header>
     <section id="login" class="login-card" aria-labelledby="login-title">
       <span class="eyebrow">YOUR CAR, AT A GLANCE</span>
       <h1 id="login-title">Welcome back.</h1>
@@ -24,11 +27,9 @@
       <p id="login-message" role="status"></p>
     </section>
     <section id="dashboard" hidden aria-labelledby="dashboard-title">
-      <div class="page-heading"><div><span class="eyebrow">VEHICLE OVERVIEW</span><h1 id="dashboard-title">A little closer to your car.</h1></div><div class="refresh-group"><div><span class="small-label">Vehicle data</span><time id="updated">No data yet</time></div><button id="refresh" class="round-button" data-action="/refresh" aria-label="Refresh vehicle data" title="Poll the vehicle now">↻</button></div></div>
       <p id="message" class="message" role="status" hidden></p>
-      <div class="overview"><div><span class="small-label">Vehicle</span><strong id="vehicle-state">Unknown</strong></div><div><span class="small-label">Security</span><strong data-reading="doors/locked" data-format="lock">Unknown</strong></div><div><span class="small-label">Battery</span><strong data-reading="drivetrain/soc" data-format="soc">Unknown</strong></div><div><span class="small-label">Connection</span><strong id="connection">Connecting</strong></div></div>
       <div class="vehicle-card">
-        <div class="canvas-heading"><span class="eyebrow">AROUND YOUR VEHICLE</span><span id="freshness" class="freshness">Waiting for data</span></div>
+        <div class="overview"><div><span class="small-label">Vehicle</span><strong id="vehicle-state">Unknown</strong></div><div><span class="small-label">Security</span><strong data-reading="doors/locked" data-format="lock">Unknown</strong></div><div><span class="small-label">Battery</span><strong data-reading="drivetrain/soc" data-format="soc">Unknown</strong></div><div><span class="small-label">Connection</span><strong id="connection">Connecting</strong></div></div>
         <div class="vehicle-layout">
           <div class="car-map" aria-label="Vehicle diagram, front at the top">
             <img src="/car.jpg" alt="Top view of a red car with visible seats and steering wheel" width="853" height="1280">
@@ -52,19 +53,11 @@
             <div class="pin tailgate pill"><span>Tailgate</span><strong data-reading="doors/boot" data-format="open">Unknown</strong></div>
           </div>
           <aside class="cabin-panel" aria-label="Cabin information">
-            <span class="eyebrow">CABIN COMFORT</span><h2>Just right inside.</h2>
+            <span class="eyebrow">CABIN COMFORT</span>
             <div class="temperatures"><div><span>Inside</span><strong data-reading="climate/interiorTemperature" data-format="temperature">Unknown</strong></div><div><span>Outside</span><strong data-reading="climate/exteriorTemperature" data-format="temperature">Unknown</strong></div></div>
-            <div class="cabin-row"><span>Climate</span><b data-reading="climate/remoteClimateState" data-format="climate">Unknown</b></div>
-            <div class="cabin-row"><span>Front defrost</span><b data-reading="climate/frontWindowDefrosterHeating" data-format="on">Unknown</b></div>
-            <div class="cabin-row"><span>Rear defrost</span><b data-reading="climate/rearWindowDefrosterHeating" data-format="on">Unknown</b></div>
-            <p class="fine-print">Seat and steering-wheel warmth are shown in place on your car.</p>
-            <div class="legend"><span class="legend-dot"></span> Amber labels are last-known readings.</div>
-            <p class="fine-print">Unknown means the vehicle has not reported a usable value. Front doors follow the left-hand-drive illustration.</p>
           </aside>
         </div>
-        <footer class="card-footer"><span>Front of vehicle ↑</span><span>Pressure in bar · Temperature in °C</span></footer>
       </div>
-      <p class="page-note">Status updates use saved vehicle data. Refresh requests a new vehicle poll.</p>
     </section>
   </main>
   <dialog id="climate-dialog" aria-labelledby="climate-title">

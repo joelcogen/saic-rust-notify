@@ -20,7 +20,7 @@ function message(text, error = false) {
 }
 function showLogin(text = '') {
   $('#dashboard').hidden = true;
-  $('#forget-token').hidden = true;
+  $('#refresh-group').hidden = true;
   $('#login').hidden = false;
   $('#login-message').textContent = text;
   if ($('#climate-dialog').open) $('#climate-dialog').close();
@@ -31,15 +31,13 @@ function showLogin(text = '') {
 function showDashboard() {
   $('#login').hidden = true;
   $('#dashboard').hidden = false;
-  $('#forget-token').hidden = false;
+  $('#refresh-group').hidden = false;
   $('#token').value = '';
 }
 function updateButtons() {
   for (const button of commands) button.disabled = busy || unavailable || snapshot?.ready !== true;
   $('#refresh').textContent = busy ? '…' : '↻';
   $('#dashboard').setAttribute('aria-busy', String(busy));
-  // Avoid losing the saved session while an accepted command may still finish.
-  $('#forget-token').disabled = busy;
 }
 function renderTime() {
   const stamp = readings['vehicle/refresh/lastVehicleState']?.value;
@@ -67,8 +65,6 @@ function render() {
   $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : 'known';
   const vehicles = (snapshot?.sources ?? []).filter(source => source.kind === 'vehicle');
   $('#connection').textContent = unavailable ? 'Unavailable' : !snapshot?.connected ? 'Disconnected' : vehicles.length > 1 ? 'Multiple vehicles' : snapshot.ready ? 'Connected' : 'Not ready';
-  const values = Object.values(readings);
-  $('#freshness').textContent = vehicles.length > 1 ? 'Select one vehicle in service config' : !values.length ? 'No vehicle data yet' : 'Last known vehicle data';
   renderTime();
   updateButtons();
 }
@@ -143,14 +139,6 @@ $('#token-form').addEventListener('submit', async event => {
     render();
   } catch (error) { $('#login-message').textContent = error.message; }
   finally { $('#connect').disabled = false; }
-});
-$('#forget-token').addEventListener('click', () => {
-  if (busy) return;
-  token = '';
-  session++;
-  try { storage.removeItem(TOKEN_KEY); } catch { /* Storage unavailable. */ }
-  showLogin();
-  $('#token').focus();
 });
 async function act(path, body) {
   if (busy || unavailable || snapshot?.ready !== true) return;

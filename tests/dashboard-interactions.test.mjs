@@ -117,7 +117,7 @@ test('unknown outcomes remain visible and are never replayed by status polling',
   assert.equal(h.calls.filter(call=>call.options.method==='POST').length,1);
   assert.match(h.nodes.get('#message').textContent,/action may have completed/);
 });
-test('authentication expiry hides data; forget clears the persisted token',async()=>{
+test('authentication expiry hides vehicle data and header refresh',async()=>{
   let reject=false;
   const h=harness({stored:'synthetic-token',handler:()=>reject?response('',401):response(fixture())});
   await settle();
@@ -126,11 +126,7 @@ test('authentication expiry hides data; forget clears the persisted token',async
   assert.equal(h.nodes.get('#dashboard').hidden,true);
   assert.equal(h.nodes.get('#login').hidden,false);
   assert.equal(h.labels[0].textContent,'Unknown');
-  const other=harness({stored:'synthetic-token'});
-  await settle();
-  other.nodes.get('#forget-token').trigger('click');
-  assert.equal(other.values.size,0);
-  assert.equal(other.nodes.get('#dashboard').hidden,true);
+  assert.equal(h.nodes.get('#refresh-group').hidden,true);
 });
 test('disconnection and ambiguous vehicle selection disable commands',async()=>{
   for(const state of [
