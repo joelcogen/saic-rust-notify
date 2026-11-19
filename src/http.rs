@@ -32,6 +32,10 @@ async fn handle(State(api): State<Api>, request: Request) -> Response {
                 "text/html; charset=utf-8",
                 include_bytes!("dashboard/index.html").as_slice(),
             )),
+            "/tabler-1.7.5.min.css" => Some((
+                "text/css; charset=utf-8",
+                include_bytes!("dashboard/vendor/tabler-1.7.5.min.css").as_slice(),
+            )),
             "/dashboard.css" => Some((
                 "text/css; charset=utf-8",
                 include_bytes!("dashboard/dashboard.css").as_slice(),
@@ -45,6 +49,10 @@ async fn handle(State(api): State<Api>, request: Request) -> Response {
                 include_bytes!("dashboard/dashboard-model.mjs").as_slice(),
             )),
             "/car.jpg" => Some(("image/jpeg", include_bytes!("dashboard/car.jpg").as_slice())),
+            "/favicon.svg" => Some((
+                "image/svg+xml",
+                include_bytes!("dashboard/favicon.svg").as_slice(),
+            )),
             _ => None,
         }
     } else {

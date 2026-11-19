@@ -344,10 +344,12 @@ async fn public_dashboard_assets_do_not_expose_data_or_bypass_api_auth() {
     for (path, mime) in [
         ("/", "text/html; charset=utf-8"),
         ("/dashboard.html", "text/html; charset=utf-8"),
+        ("/tabler-1.7.5.min.css", "text/css; charset=utf-8"),
         ("/dashboard.css", "text/css; charset=utf-8"),
         ("/dashboard.js", "text/javascript; charset=utf-8"),
         ("/dashboard-model.mjs", "text/javascript; charset=utf-8"),
         ("/car.jpg", "image/jpeg"),
+        ("/favicon.svg", "image/svg+xml"),
     ] {
         for method in ["GET", "HEAD"] {
             let response = app

@@ -127,8 +127,9 @@ Open the service root (for example `http://127.0.0.1:8080/`) and enter your
 `CLIMATE_API_TOKEN`. After validation, it is kept in this browser's localStorage
 and reused across visits without prompting. It is sent only in the same-origin
 Authorization header, never in a URL. Clear this site’s browser data to remove the saved token.
-The dashboard is titled **Big Red**, with vehicle data age and refresh in the header,
-a combined status and vehicle card, and interior temperature beside the climate control.
+The dashboard is titled **Big Red** and uses a light red Tabler theme. The header
+shows the last vehicle update and refresh control. Metrics sit above the car
+diagram, and interior temperature appears beside the climate control.
 A rejected token requires a replacement; clearing browser storage also clears it.
 If the browser blocks storage, the page explains that persistence is unavailable.
 
@@ -136,7 +137,9 @@ The supplied car image has positioned status pills for tires, doors and windows,
 bonnet/tailgate, front/rear heated seats, steering heat and defrost. The overview
 shows lock, parked/driving/charging, battery and connection. The illustration is left-hand drive; front doors/windows are labeled
 by driver/passenger role, while tires and heated seats are physical left/right.
-Missing or unsupported readings display **Unknown**. Last known readings stay visible with their observation timestamp; multiple vehicles are never combined. Select `SAIC_VIN` for a single
+Missing or unsupported readings display **Unknown**. Stale readings stay visible
+in amber with a stale-data notice and the last successful vehicle update in the
+header. Multiple vehicles are never combined. Select `SAIC_VIN` for a single
 vehicle dashboard when an account contains more than one car.
 
 The top timestamp is the stored vehicle observation time, shown as an updating
@@ -148,8 +151,11 @@ routine, not the cabin target. These are all three service control endpoints;
 other labels show status. Commands are disabled while one is running or the
 service is unavailable, and errors/uncertain outcomes are never retried automatically.
 
-The shell, stylesheet, scripts and image are public, contain no account data,
-and are embedded in the executable. All telemetry and actions require the token.
+The shell, stylesheets, scripts, favicon and vehicle image are public, contain no
+account data, and are embedded in the executable. All telemetry and actions require
+the token. The precompiled Tabler stylesheet is pinned to `@tabler/core` 1.7.5 and
+stored with its MIT license in [src/dashboard/vendor](src/dashboard/vendor). The
+vendored stylesheet drops the upstream source-map comment.
 No JavaScript build step, external fonts, CDN, or runtime asset directory is needed.
 
 Telemetry conversion follows the [upstream vehicle publisher](https://github.com/SAIC-iSmart-API/saic-python-mqtt-gateway/blob/master/src/status_publisher/vehicle/basic_vehicle_status.py):

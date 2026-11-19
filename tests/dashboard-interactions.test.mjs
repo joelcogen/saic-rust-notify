@@ -72,10 +72,53 @@ test('invalid tokens are not persisted and storage failure is explained',async()
   await login(h,'wrong');
   assert.equal(h.values.size,0);
   assert.match(h.nodes.get('#login-message').textContent,/token was rejected/);
+  assert.equal(h.nodes.get('#login-message').dataset.quality,'failed');
   const denied=harness({denied:true});
   await login(denied);
   assert.match(denied.nodes.get('#message').textContent,/storage is unavailable/);
   assert.equal(denied.nodes.get('#dashboard').hidden,false);
+});
+test('saved-token loading shows Connecting until cached status arrives',async()=>{
+  let finish;
+  const h=harness({stored:'synthetic-token',handler:()=>new Promise(resolve=>{finish=resolve;})});
+  assert.equal(h.nodes.get('#connection').textContent,'Connecting…');
+  assert.equal(h.nodes.get('#connection').dataset.quality,'unknown');
+  assert.equal(h.actions[0].disabled,true);
+  finish(response(fixture()));
+  await settle();
+  assert.equal(h.nodes.get('#connection').textContent,'Connected');
+  assert.equal(h.nodes.get('#connection').dataset.quality,'healthy');
+  assert.equal(h.actions[0].disabled,false);
+});
+test('stale readings keep their values and the last update through polling failures',async()=>{
+  const initial=fixture();
+  initial.sources[0].readings['vehicle/doors/locked'].fresh=false;
+  initial.sources[0].readings['vehicle/drivetrain/parked'].fresh=false;
+  let handler=()=>response(initial);
+  const h=harness({stored:'synthetic-token',handler:()=>handler()});
+  const reading=key=>h.labels.find(label=>label.dataset.reading===key);
+  await settle();
+  assert.equal(reading('doors/locked').textContent,'Locked');
+  assert.equal(reading('doors/locked').dataset.quality,'stale');
+  assert.equal(reading('drivetrain/soc').dataset.quality,'unknown');
+  assert.equal(h.nodes.get('#vehicle-state').dataset.quality,'stale');
+  assert.equal(h.nodes.get('#stale-notice').hidden,false);
+  assert.equal(h.nodes.get('#updated').dateTime,'2026-11-15T12:00:00Z');
+
+  handler=()=>{throw Error('synthetic network failure');};
+  await h.intervals.get(10000)();
+  assert.equal(h.nodes.get('#connection').textContent,'Unavailable');
+  assert.equal(h.nodes.get('#connection').dataset.quality,'failed');
+  assert.match(h.nodes.get('#message').className,/alert-danger/);
+  assert.equal(reading('climate/interiorTemperature').textContent,'5°C');
+  assert.equal(reading('climate/interiorTemperature').dataset.quality,'stale');
+  assert.equal(h.nodes.get('#updated').dateTime,'2026-11-15T12:00:00Z');
+
+  handler=()=>response(fixture());
+  await h.intervals.get(10000)();
+  assert.equal(h.nodes.get('#stale-notice').hidden,true);
+  assert.equal(reading('doors/locked').dataset.quality,'healthy');
+  assert.match(h.nodes.get('#message').className,/alert-success/);
 });
 test('actions use POST once, lock buttons and update only from cached status',async()=>{
   let finish;
@@ -84,6 +127,7 @@ test('actions use POST once, lock buttons and update only from cached status',as
   const first=h.actions[1].trigger('click');
   const duplicate=h.actions[1].trigger('click');
   assert.equal(h.actions[0].disabled,true);
+  assert.match(h.nodes.get('#message').className,/alert-secondary/);
   assert.equal(h.calls.filter(call=>call.options.method==='POST').length,1);
   finish(response('Demo lights flashed'));
   await first; await duplicate;
@@ -91,6 +135,7 @@ test('actions use POST once, lock buttons and update only from cached status',as
   assert.equal(h.calls.at(-1).path,'/api/status');
   assert.equal(h.calls.at(-1).options.method,'GET');
   assert.equal(h.nodes.get('#message').textContent,'Demo lights flashed');
+  assert.match(h.nodes.get('#message').className,/alert-success/);
 });
 test('climate dialog sends interior override only after explicit start',async()=>{
   const h=harness({stored:'synthetic-token'});

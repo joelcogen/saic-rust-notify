@@ -13,16 +13,22 @@ let unavailable = false;
 let storageWarning = false;
 const commands = [...document.querySelectorAll('[data-action]'), $('#start-climate')];
 
-function message(text, error = false) {
-  $('#message').textContent = text;
-  $('#message').hidden = !text;
-  $('#message').classList.toggle('error', error);
+function message(text, tone = 'secondary') {
+  const notice = $('#message');
+  notice.className = `alert alert-${tone} mb-3`;
+  notice.textContent = text;
+  notice.hidden = !text;
+}
+function loginMessage(text, error = false) {
+  const notice = $('#login-message');
+  notice.textContent = text;
+  notice.dataset.quality = error ? 'failed' : 'unknown';
 }
 function showLogin(text = '') {
   $('#dashboard').hidden = true;
   $('#refresh-group').hidden = true;
   $('#login').hidden = false;
-  $('#login-message').textContent = text;
+  loginMessage(text, Boolean(text));
   if ($('#climate-dialog').open) $('#climate-dialog').close();
   snapshot = null;
   readings = {};
@@ -50,21 +56,40 @@ function renderTime() {
     $('#updated').removeAttribute('title');
   }
 }
+function renderConnection() {
+  const vehicles = (snapshot?.sources ?? []).filter(source => source.kind === 'vehicle');
+  const [text, quality] = unavailable ? ['Unavailable', 'failed']
+    : !snapshot ? ['Connecting…', 'unknown']
+    : !snapshot.connected ? ['Disconnected', 'failed']
+    : vehicles.length > 1 ? ['Multiple vehicles', 'unknown']
+    : snapshot.ready ? ['Connected', 'healthy'] : ['Not ready', 'unknown'];
+  const connection = $('#connection');
+  if (connection.textContent !== text) connection.textContent = text;
+  connection.dataset.quality = quality;
+}
 function render() {
   readings = vehicleReadings(snapshot);
+  let hasStaleReading = false;
   for (const element of document.querySelectorAll('[data-reading]')) {
     const reading = readings[`vehicle/${element.dataset.reading}`];
     const value = display(reading?.value, element.dataset.format);
     element.textContent = value;
-    const quality = value === 'Unknown' ? 'unknown' : 'known';
+    const quality = value === 'Unknown' ? 'unknown'
+      : unavailable || !reading.fresh ? 'stale'
+      : value === 'Locked' || value === 'Closed' ? 'healthy'
+      : value === 'Off' ? 'off' : 'known';
+    hasStaleReading ||= quality === 'stale';
     element.dataset.quality = quality;
-    element.title = quality === 'unknown' ? 'No usable reading reported' : 'Last known vehicle reading';
+    element.title = quality === 'unknown' ? 'No usable reading reported'
+      : quality === 'stale' ? 'Stale vehicle reading' : 'Last known vehicle reading';
   }
   const state = vehicleState(readings);
+  const staleState = state.text !== 'Unknown' && (unavailable || state.stale);
   $('#vehicle-state').textContent = state.text;
-  $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : 'known';
-  const vehicles = (snapshot?.sources ?? []).filter(source => source.kind === 'vehicle');
-  $('#connection').textContent = unavailable ? 'Unavailable' : !snapshot?.connected ? 'Disconnected' : vehicles.length > 1 ? 'Multiple vehicles' : snapshot.ready ? 'Connected' : 'Not ready';
+  $('#vehicle-state').dataset.quality = state.text === 'Unknown' ? 'unknown' : staleState ? 'stale' : 'known';
+  $('#vehicle-state').title = staleState ? 'Stale vehicle reading' : '';
+  $('#stale-notice').hidden = !(staleState || hasStaleReading);
+  renderConnection();
   renderTime();
   updateButtons();
 }
@@ -94,10 +119,11 @@ function handleError(error) {
     token = '';
     session++;
     showLogin(error.message);
+    $('#token').focus();
     // Keep the persisted value until an explicit replacement/forget, including
     // during temporary configuration failures. It is never put into the URL.
   } else {
-    message(error.message, true);
+    message(error.message, 'danger');
     render();
   }
 }
@@ -114,7 +140,8 @@ async function loadStatus(preserveMessage = false) {
     showDashboard();
     render();
     if (recovered && !preserveMessage && $('#message').textContent.startsWith('Cannot reach the service.')) {
-      message(storageWarning ? 'Browser storage is unavailable. Your token will only be kept for this visit.' : 'Connection restored.');
+      if (storageWarning) message('Browser storage is unavailable. Your token will only be kept for this visit.');
+      else message('Connection restored.', 'success');
     }
   } catch (error) {
     if (generation === session) handleError(error);
@@ -125,7 +152,7 @@ $('#token-form').addEventListener('submit', async event => {
   const candidate = $('#token').value.trim();
   if (!candidate) return;
   $('#connect').disabled = true;
-  $('#login-message').textContent = 'Connecting…';
+  loginMessage('Connecting…');
   const generation = ++session;
   try {
     const result = await request('/api/status', 'GET', undefined, candidate);
@@ -137,7 +164,8 @@ $('#token-form').addEventListener('submit', async event => {
     showDashboard();
     message(storageWarning ? 'Browser storage is unavailable. Your token will only be kept for this visit.' : '');
     render();
-  } catch (error) { $('#login-message').textContent = error.message; }
+    $('#dashboard-title').focus({preventScroll:true});
+  } catch (error) { loginMessage(error.message, true); }
   finally { $('#connect').disabled = false; }
 });
 async function act(path, body) {
@@ -147,7 +175,7 @@ async function act(path, body) {
   message(path === '/refresh' ? 'Refreshing vehicle data…' : path === '/locate' ? 'Requesting a light flash…' : 'Starting climate. This may take a few minutes…');
   try {
     const result = await request(path, 'POST', body);
-    message(result);
+    message(result, 'success');
   } catch (error) { handleError(error); }
   finally {
     busy = false;

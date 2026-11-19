@@ -25,7 +25,7 @@ done
 [ "$(docker exec "$container_name" id -g)" = 10001 ]
 docker exec "$container_name" sh -ec 'test -w /app/data && test -f /app/data/polling.json'
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$port/api/status")" = 401 ]
-for asset in / /dashboard.html /dashboard.css /dashboard.js /dashboard-model.mjs /car.jpg; do
+for asset in / /dashboard.html /tabler-1.7.5.min.css /dashboard.css /dashboard.js /dashboard-model.mjs /car.jpg /favicon.svg; do
   [ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://$port$asset")" = 200 ]
 done
 docker exec "$container_name" sh -ec '

@@ -1,65 +1,143 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f5f5f3">
+  <meta name="theme-color" content="#f8f4f5">
   <title>Big Red</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/tabler-1.7.5.min.css">
   <link rel="stylesheet" href="/dashboard.css">
   <script type="module" src="/dashboard.js"></script>
 </head>
-<body>
-  <main>
-    <header class="masthead">
-      <h1 id="dashboard-title"><a class="brand" href="/">Big Red</a></h1>
-      <div id="refresh-group" class="refresh-group" hidden><div><span class="small-label">Vehicle data</span><time id="updated">No data yet</time></div><button id="refresh" class="round-button" data-action="/refresh" aria-label="Refresh vehicle data" title="Poll the vehicle now">↻</button></div>
-    </header>
-    <section id="login" class="login-card" aria-labelledby="login-title">
-      <span class="eyebrow">YOUR CAR, AT A GLANCE</span>
-      <h1 id="login-title">Welcome back.</h1>
-      <p>Enter your access token to connect to your vehicle.</p>
-      <form id="token-form">
-        <label for="token">Access token</label>
-        <input id="token" type="password" autocomplete="off" spellcheck="false" required placeholder="Your dashboard token">
-        <button id="connect" class="primary" type="submit">Open dashboard <span aria-hidden="true">↗</span></button>
-      </form>
-      <p class="fine-print">Saved in this browser so you only need to enter it once.</p>
-      <p id="login-message" role="status"></p>
+<body class="page">
+  <header class="navbar masthead">
+    <div class="container-xl">
+      <h1 class="navbar-brand" id="dashboard-title" tabindex="-1">
+        <a class="brand" href="/"><img class="navbar-brand-image" src="/favicon.svg" alt="" width="32" height="32">Big Red</a>
+      </h1>
+      <div id="refresh-group" class="d-flex align-items-center gap-2" hidden>
+        <div class="text-end">
+          <div class="text-secondary small">Last vehicle update</div>
+          <time id="updated" class="fw-semibold">No data yet</time>
+        </div>
+        <button id="refresh" class="btn btn-icon btn-outline-primary" data-action="/refresh" aria-label="Refresh vehicle data" title="Poll the vehicle now">↻</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container-xl dashboard-content">
+    <section id="login" class="card login-card" aria-labelledby="login-title">
+      <div class="card-body">
+        <h2 id="login-title" class="h1 mb-2">Connect to Big Red</h2>
+        <p class="text-secondary mb-3">Enter your access token to open the dashboard.</p>
+        <form id="token-form">
+          <label class="form-label" for="token">Access token</label>
+          <input id="token" class="form-control mb-3" type="password" autocomplete="off" spellcheck="false" required aria-describedby="token-help">
+          <button id="connect" class="btn btn-primary w-100" type="submit">Open dashboard</button>
+          <p id="token-help" class="form-hint mt-2">Your token is saved in this browser.</p>
+        </form>
+        <p id="login-message" class="login-message mb-0" role="status"></p>
+      </div>
     </section>
+
     <section id="dashboard" hidden aria-labelledby="dashboard-title">
-      <p id="message" class="message" role="status" hidden></p>
-      <div class="vehicle-card">
-        <div class="overview"><div><span class="small-label">Vehicle</span><strong id="vehicle-state">Unknown</strong></div><div><span class="small-label">Security</span><strong data-reading="doors/locked" data-format="lock">Unknown</strong></div><div><span class="small-label">Battery</span><strong data-reading="drivetrain/soc" data-format="soc">Unknown</strong></div><div><span class="small-label">Connection</span><strong id="connection">Connecting</strong></div></div>
+      <div id="message" class="alert mb-3" role="status" hidden></div>
+      <div class="card vehicle-card">
+        <div class="overview">
+          <div class="card h-100">
+            <div class="card-body">
+              <span class="metric-label">Vehicle</span>
+              <strong id="vehicle-state" class="metric-value">Unknown</strong>
+            </div>
+          </div>
+          <div class="card h-100">
+            <div class="card-body">
+              <span class="metric-label">Security</span>
+              <strong class="metric-value" data-reading="doors/locked" data-format="lock">Unknown</strong>
+            </div>
+          </div>
+          <div class="card h-100">
+            <div class="card-body">
+              <span class="metric-label">Battery</span>
+              <strong class="metric-value" data-reading="drivetrain/soc" data-format="soc">Unknown</strong>
+            </div>
+          </div>
+          <div class="card h-100">
+            <div class="card-body">
+              <span class="metric-label">Connection</span>
+              <strong id="connection" class="metric-value" role="status" data-quality="unknown">Connecting…</strong>
+            </div>
+          </div>
+        </div>
         <div class="vehicle-layout">
-          <div class="car-map" aria-label="Vehicle diagram, front at the top">
+          <div id="stale-notice" class="alert alert-warning mb-3" role="status" hidden>Some vehicle readings are stale.</div>
+          <div class="car-map" role="group" aria-label="Vehicle diagram, front at the top">
             <img src="/car.jpg" alt="Top view of a red car with visible seats and steering wheel" width="853" height="1280">
-            <div class="pin hood"><button class="dark-button" data-action="/locate"><span aria-hidden="true">⌖</span> Locate</button><span class="hood-status">Bonnet <b data-reading="doors/bonnet" data-format="open">Unknown</b></span></div>
-            <div class="pin tyre front-left"><span>Front left</span><strong data-reading="tyres/frontLeftPressure" data-format="pressure">Unknown</strong></div>
-            <div class="pin tyre front-right"><span>Front right</span><strong data-reading="tyres/frontRightPressure" data-format="pressure">Unknown</strong></div>
-            <div class="pin front-defrost pill"><span>Front defrost</span><strong data-reading="climate/frontWindowDefrosterHeating" data-format="on">Unknown</strong></div>
-            <button class="pin climate-control dark-button" id="open-climate"><span aria-hidden="true">❄</span> Climate <b data-reading="climate/remoteClimateState" data-format="climate">Unknown</b><span class="climate-temperature">Inside <b data-reading="climate/interiorTemperature" data-format="temperature">Unknown</b></span><span aria-hidden="true">›</span></button>
-            <div class="pin steering pill"><span>Steering heat</span><strong data-reading="climate/steeringWheelHeating" data-format="on">Unknown</strong></div>
-            <div class="pin door door-fl"><span>Driver</span><div>Door <b data-reading="doors/driver" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/driver" data-format="open">Unknown</b></div></div>
-            <div class="pin door door-fr"><span>Passenger</span><div>Door <b data-reading="doors/passenger" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/passenger" data-format="open">Unknown</b></div></div>
-            <div class="pin seat seat-fl pill"><span>Seat heat · FL</span><strong data-reading="climate/heatedSeatsFrontLeftLevel" data-format="seat">Unknown</strong></div>
-            <div class="pin seat seat-fr pill"><span>Seat heat · FR</span><strong data-reading="climate/heatedSeatsFrontRightLevel" data-format="seat">Unknown</strong></div>
-            <div class="pin door door-rl"><span>Rear left</span><div>Door <b data-reading="doors/rearLeft" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/rearLeft" data-format="open">Unknown</b></div></div>
-            <div class="pin door door-rr"><span>Rear right</span><div>Door <b data-reading="doors/rearRight" data-format="open">Unknown</b></div><div>Window <b data-reading="windows/rearRight" data-format="open">Unknown</b></div></div>
-            <div class="pin seat seat-rl pill"><span>Seat heat · RL</span><strong data-reading="climate/heatedSeatsRearLeftLevel" data-format="rear-seat">Unknown</strong></div>
-            <div class="pin seat seat-rr pill"><span>Seat heat · RR</span><strong data-reading="climate/heatedSeatsRearRightLevel" data-format="rear-seat">Unknown</strong></div>
-            <div class="pin tyre rear-left"><span>Rear left</span><strong data-reading="tyres/rearLeftPressure" data-format="pressure">Unknown</strong></div>
-            <div class="pin tyre rear-right"><span>Rear right</span><strong data-reading="tyres/rearRightPressure" data-format="pressure">Unknown</strong></div>
-            <div class="pin rear-defrost pill"><span>Rear defrost</span><strong data-reading="climate/rearWindowDefrosterHeating" data-format="on">Unknown</strong></div>
-            <div class="pin tailgate pill"><span>Tailgate</span><strong data-reading="doors/boot" data-format="open">Unknown</strong></div>
+            <div class="pin hood">
+              <button class="btn btn-primary" data-action="/locate"><span class="control-icon" aria-hidden="true">⌖</span>Locate</button>
+              <div class="pin-box bonnet"><span class="pin-label">Bonnet</span><strong data-reading="doors/bonnet" data-format="open">Unknown</strong></div>
+            </div>
+            <div class="pin pin-box tyre front-left"><span class="pin-label">Front left</span><strong data-reading="tyres/frontLeftPressure" data-format="pressure">Unknown</strong></div>
+            <div class="pin pin-box tyre front-right"><span class="pin-label">Front right</span><strong data-reading="tyres/frontRightPressure" data-format="pressure">Unknown</strong></div>
+            <div class="pin pin-box front-defrost"><span class="pin-label">Front defrost</span><strong data-reading="climate/frontWindowDefrosterHeating" data-format="on">Unknown</strong></div>
+            <button class="pin btn btn-primary climate-control" id="open-climate" aria-haspopup="dialog">
+              <span class="control-icon" aria-hidden="true">❄</span>
+              <span>Climate <b data-reading="climate/remoteClimateState" data-format="climate">Unknown</b></span>
+              <span class="climate-temperature">Inside <b data-reading="climate/interiorTemperature" data-format="temperature">Unknown</b></span>
+              <span aria-hidden="true">›</span>
+            </button>
+            <div class="pin pin-box steering"><span class="pin-label">Steering heat</span><strong data-reading="climate/steeringWheelHeating" data-format="on">Unknown</strong></div>
+            <div class="pin pin-box door door-fl">
+              <span class="pin-label">Driver</span>
+              <div>Door <b data-reading="doors/driver" data-format="open">Unknown</b></div>
+              <div>Window <b data-reading="windows/driver" data-format="open">Unknown</b></div>
+            </div>
+            <div class="pin pin-box door door-fr">
+              <span class="pin-label">Passenger</span>
+              <div>Door <b data-reading="doors/passenger" data-format="open">Unknown</b></div>
+              <div>Window <b data-reading="windows/passenger" data-format="open">Unknown</b></div>
+            </div>
+            <div class="pin pin-box seat seat-fl"><span class="pin-label">Seat heat · FL</span><strong data-reading="climate/heatedSeatsFrontLeftLevel" data-format="seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-fr"><span class="pin-label">Seat heat · FR</span><strong data-reading="climate/heatedSeatsFrontRightLevel" data-format="seat">Unknown</strong></div>
+            <div class="pin pin-box door door-rl">
+              <span class="pin-label">Rear left</span>
+              <div>Door <b data-reading="doors/rearLeft" data-format="open">Unknown</b></div>
+              <div>Window <b data-reading="windows/rearLeft" data-format="open">Unknown</b></div>
+            </div>
+            <div class="pin pin-box door door-rr">
+              <span class="pin-label">Rear right</span>
+              <div>Door <b data-reading="doors/rearRight" data-format="open">Unknown</b></div>
+              <div>Window <b data-reading="windows/rearRight" data-format="open">Unknown</b></div>
+            </div>
+            <div class="pin pin-box seat seat-rl"><span class="pin-label">Seat heat · RL</span><strong data-reading="climate/heatedSeatsRearLeftLevel" data-format="rear-seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-rr"><span class="pin-label">Seat heat · RR</span><strong data-reading="climate/heatedSeatsRearRightLevel" data-format="rear-seat">Unknown</strong></div>
+            <div class="pin pin-box tyre rear-left"><span class="pin-label">Rear left</span><strong data-reading="tyres/rearLeftPressure" data-format="pressure">Unknown</strong></div>
+            <div class="pin pin-box tyre rear-right"><span class="pin-label">Rear right</span><strong data-reading="tyres/rearRightPressure" data-format="pressure">Unknown</strong></div>
+            <div class="pin pin-box rear-defrost"><span class="pin-label">Rear defrost</span><strong data-reading="climate/rearWindowDefrosterHeating" data-format="on">Unknown</strong></div>
+            <div class="pin pin-box tailgate"><span class="pin-label">Tailgate</span><strong data-reading="doors/boot" data-format="open">Unknown</strong></div>
           </div>
         </div>
       </div>
     </section>
   </main>
-  <dialog id="climate-dialog" aria-labelledby="climate-title">
-    <div class="dialog-heading"><span class="eyebrow">CABIN COMFORT</span><button id="close-climate" class="round-button" aria-label="Close climate controls">×</button></div>
-    <h2 id="climate-title">Get comfortable.</h2><p>Start automatic climate at 22°C, or front defrost when it’s 4°C or colder. Seat and steering heat join in at 6°C or colder, rear defrost at 4°C.</p>
-    <form id="climate-form"><label for="temperature">Interior temperature override <span>(optional)</span></label><input id="temperature" type="number" step="any" placeholder="Use the interior reading" aria-describedby="temperature-help"><p id="temperature-help" class="fine-print">Interior °C selects the heating routine. It is not a cabin target temperature.</p><button class="primary" id="start-climate" type="submit">Start climate</button></form>
+
+  <dialog id="climate-dialog" class="modal-content climate-dialog" aria-labelledby="climate-title">
+    <div class="modal-header">
+      <h2 id="climate-title" class="modal-title">Climate controls</h2>
+      <button id="close-climate" class="btn btn-ghost-secondary btn-icon" aria-label="Close climate controls">×</button>
+    </div>
+    <form id="climate-form">
+      <div class="modal-body">
+        <p>Start automatic climate at 22°C, or front defrost at 4°C or colder. Seat and steering heat join in at 6°C or colder and rear defrost at 4°C.</p>
+        <label class="form-label" for="temperature">Interior temperature override <span class="text-secondary">(optional)</span></label>
+        <input id="temperature" class="form-control" type="number" step="any" placeholder="Use the interior reading" aria-describedby="temperature-help" autofocus>
+        <p id="temperature-help" class="form-hint mb-0">Enter the current interior temperature in °C to choose the heating routine.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="start-climate" type="submit">Start climate</button>
+      </div>
+    </form>
   </dialog>
 </body>
 </html>
