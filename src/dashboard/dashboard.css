@@ -19,6 +19,7 @@ dialog:not([open]) {
 }
 
 .masthead {
+  flex-shrink: 0;
   background: var(--tblr-bg-surface);
   border-top: 3px solid var(--tblr-primary);
 }
@@ -100,7 +101,7 @@ dialog:not([open]) {
 }
 
 .vehicle-layout {
-  padding: 16px 8px;
+  padding: 12px;
 }
 
 .car-map {
@@ -151,6 +152,10 @@ dialog:not([open]) {
   display: grid;
   justify-items: center;
   gap: 8px;
+}
+
+.hood .btn {
+  gap: 6px;
 }
 
 .bonnet {
@@ -321,7 +326,7 @@ dialog:not([open]) {
 
 @media (min-width: 576px) {
   .vehicle-layout {
-    padding-inline: 16px;
+    padding: 16px;
   }
 }
 
@@ -347,11 +352,26 @@ dialog:not([open]) {
 }
 
 @media (max-width: 575.98px) {
-  .overview .card-body {
-    padding-inline: 8px;
+  .dashboard-content {
+    padding-top: 12px;
   }
 
-  .car-map .pin-box {
+  .overview {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .overview .card-body {
+    padding: 8px 12px;
+  }
+
+  #stale-notice {
+    --tblr-alert-padding-x: 0.75rem;
+    --tblr-alert-padding-y: 0.5rem;
+    --tblr-alert-margin-bottom: 0.5rem;
+  }
+
+  .pin-box:not(.bonnet) {
     padding-inline: 4px;
   }
 
