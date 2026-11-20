@@ -27,7 +27,8 @@ function element(dataset={}) {
 }
 function harness({stored='', handler, denied=false}={}) {
   const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(match=>['#'+match[1],element()]));
-  const labels = [...html.matchAll(/data-reading="([^"]+)" data-format="([^"]+)"/g)].map(match=>element({reading:match[1],format:match[2]}));
+  const labels = [...html.matchAll(/data-reading="([^"]+)" data-format="([^"]+)"(?: data-unknown="([^"]+)")?/g)]
+    .map(([,reading,format,unknown])=>element({reading,format,unknown}));
   const actions = ['/refresh','/locate'].map(action=>element({action}));
   nodes.set('#refresh',actions[0]);
   const calls = [];
@@ -93,14 +94,18 @@ test('saved-token loading shows Connecting until cached status arrives',async()=
 test('stale readings keep their values and the last update through polling failures',async()=>{
   const initial=fixture();
   initial.sources[0].readings['vehicle/doors/locked'].fresh=false;
+  initial.sources[0].readings['vehicle/windows/driver']=reading(false);
   initial.sources[0].readings['vehicle/drivetrain/parked'].fresh=false;
   let handler=()=>response(initial);
   const h=harness({stored:'synthetic-token',handler:()=>handler()});
-  const reading=key=>h.labels.find(label=>label.dataset.reading===key);
+  const labelFor=key=>h.labels.find(label=>label.dataset.reading===key);
   await settle();
-  assert.equal(reading('doors/locked').textContent,'Locked');
-  assert.equal(reading('doors/locked').dataset.quality,'stale');
-  assert.equal(reading('drivetrain/soc').dataset.quality,'unknown');
+  assert.equal(labelFor('doors/locked').textContent,'Locked');
+  assert.equal(labelFor('doors/locked').dataset.quality,'stale');
+  assert.equal(labelFor('doors/driver').textContent,'Unk.');
+  assert.equal(labelFor('doors/driver').dataset.quality,'unknown');
+  assert.equal(labelFor('windows/driver').textContent,'Closed');
+  assert.equal(labelFor('drivetrain/soc').dataset.quality,'unknown');
   assert.equal(h.nodes.get('#vehicle-state').dataset.quality,'stale');
   assert.equal(h.nodes.get('#stale-notice').hidden,false);
   assert.equal(h.nodes.get('#updated').dateTime,'2026-11-15T12:00:00Z');
@@ -110,14 +115,14 @@ test('stale readings keep their values and the last update through polling failu
   assert.equal(h.nodes.get('#connection').textContent,'Unavailable');
   assert.equal(h.nodes.get('#connection').dataset.quality,'failed');
   assert.match(h.nodes.get('#message').className,/alert-danger/);
-  assert.equal(reading('climate/interiorTemperature').textContent,'5°C');
-  assert.equal(reading('climate/interiorTemperature').dataset.quality,'stale');
+  assert.equal(labelFor('climate/interiorTemperature').textContent,'5°C');
+  assert.equal(labelFor('climate/interiorTemperature').dataset.quality,'stale');
   assert.equal(h.nodes.get('#updated').dateTime,'2026-11-15T12:00:00Z');
 
   handler=()=>response(fixture());
   await h.intervals.get(10000)();
   assert.equal(h.nodes.get('#stale-notice').hidden,true);
-  assert.equal(reading('doors/locked').dataset.quality,'healthy');
+  assert.equal(labelFor('doors/locked').dataset.quality,'healthy');
   assert.match(h.nodes.get('#message').className,/alert-success/);
 });
 test('actions use POST once, lock buttons and update only from cached status',async()=>{

@@ -73,11 +73,11 @@ function render() {
   for (const element of document.querySelectorAll('[data-reading]')) {
     const reading = readings[`vehicle/${element.dataset.reading}`];
     const value = display(reading?.value, element.dataset.format);
-    element.textContent = value;
     const quality = value === 'Unknown' ? 'unknown'
       : unavailable || !reading.fresh ? 'stale'
       : value === 'Locked' || value === 'Closed' ? 'healthy'
       : value === 'Off' ? 'off' : 'known';
+    element.textContent = quality === 'unknown' ? element.dataset.unknown ?? value : value;
     hasStaleReading ||= quality === 'stale';
     element.dataset.quality = quality;
     element.title = quality === 'unknown' ? 'No usable reading reported'

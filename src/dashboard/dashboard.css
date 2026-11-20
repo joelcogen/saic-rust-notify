@@ -104,6 +104,24 @@ dialog:not([open]) {
   padding: 12px;
 }
 
+.vehicle-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#stale-notice {
+  flex: 1;
+  --tblr-alert-padding-x: 0.75rem;
+  --tblr-alert-padding-y: 0.5rem;
+  --tblr-alert-margin-bottom: 0;
+}
+
+.locate-control {
+  margin-inline-start: auto;
+}
+
 .car-map {
   position: relative;
   width: 100%;
@@ -146,19 +164,9 @@ dialog:not([open]) {
   font-size: .6875rem;
 }
 
-.hood {
-  top: 11%;
-  left: 50%;
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-}
-
-.hood .btn {
-  gap: 6px;
-}
-
 .bonnet {
+  top: 15%;
+  left: 50%;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -250,6 +258,10 @@ dialog:not([open]) {
 
 .door :where(b) {
   color: var(--tblr-body-color);
+}
+
+.door-window abbr {
+  display: none;
 }
 
 .door-fl,
@@ -365,32 +377,51 @@ dialog:not([open]) {
     padding: 8px 12px;
   }
 
-  #stale-notice {
-    --tblr-alert-padding-x: 0.75rem;
-    --tblr-alert-padding-y: 0.5rem;
-    --tblr-alert-margin-bottom: 0.5rem;
+  .pin-box {
+    padding: 4px;
+    font-size: .75rem;
   }
 
-  .pin-box:not(.bonnet) {
-    padding-inline: 4px;
+  .pin-label {
+    font-size: .625rem;
   }
 
   .climate-control {
-    font-size: .8125rem;
+    gap: 6px;
     padding-inline: 8px;
+    font-size: .75rem;
+  }
+
+  .climate-temperature {
+    padding-left: 6px;
   }
 
   .steering {
     left: 44%;
   }
 
-  .car-map .door {
-    width: min(27%, 108px);
+  .door {
+    width: min(26%, 108px);
+    padding-inline: 3px;
+    font-size: .625rem;
+  }
+
+  .door-fl,
+  .door-rl {
+    left: 13%;
+  }
+
+  .door-fr,
+  .door-rr {
+    left: 87%;
   }
 
   .door div {
-    flex-wrap: wrap;
-    row-gap: 0;
+    white-space: nowrap;
+  }
+
+  .door .pin-label {
+    font-size: .6875rem;
   }
 
   .seat-fl,
@@ -404,6 +435,20 @@ dialog:not([open]) {
   }
 
   .seat {
-    width: min(20%, 90px);
+    width: min(22%, 90px);
+    padding-inline: 3px;
+    font-size: .6875rem;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 383.98px) {
+  .door-window > span {
+    display: none;
+  }
+
+  .door-window abbr {
+    display: inline;
+    text-decoration: none;
   }
 }

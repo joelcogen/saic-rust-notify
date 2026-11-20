@@ -71,13 +71,13 @@
           </div>
         </div>
         <div class="vehicle-layout">
-          <div id="stale-notice" class="alert alert-warning" role="status" hidden>Some vehicle readings are stale.</div>
+          <div class="vehicle-toolbar">
+            <div id="stale-notice" class="alert alert-warning" role="status" hidden>Some readings are stale.</div>
+            <button type="button" class="btn btn-primary locate-control" data-action="/locate">Locate</button>
+          </div>
           <div class="car-map" role="group" aria-label="Vehicle diagram, front at the top">
             <img src="/car.jpg" alt="Top view of a red car with visible seats and steering wheel" width="853" height="1280">
-            <div class="pin hood">
-              <button class="btn btn-primary" data-action="/locate"><span class="control-icon" aria-hidden="true">⌖</span>Locate</button>
-              <div class="pin-box bonnet"><span class="pin-label">Bonnet</span><strong data-reading="doors/bonnet" data-format="open">Unknown</strong></div>
-            </div>
+            <div class="pin pin-box bonnet"><span class="pin-label">Bonnet</span><strong data-reading="doors/bonnet" data-format="open">Unknown</strong></div>
             <div class="pin pin-box tyre front-left"><span class="pin-label">Front left</span><strong data-reading="tyres/frontLeftPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin pin-box tyre front-right"><span class="pin-label">Front right</span><strong data-reading="tyres/frontRightPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin pin-box front-defrost"><span class="pin-label">Front defrost</span><strong data-reading="climate/frontWindowDefrosterHeating" data-format="on">Unknown</strong></div>
@@ -90,28 +90,28 @@
             <div class="pin pin-box steering"><span class="pin-label">Steering heat</span><strong data-reading="climate/steeringWheelHeating" data-format="on">Unknown</strong></div>
             <div class="pin pin-box door door-fl">
               <span class="pin-label">Driver</span>
-              <div>Door <b data-reading="doors/driver" data-format="open">Unknown</b></div>
-              <div>Window <b data-reading="windows/driver" data-format="open">Unknown</b></div>
+              <div>Door <b data-reading="doors/driver" data-format="open" data-unknown="Unk.">Unk.</b></div>
+              <div><span class="door-window"><span>Window</span><abbr title="Window">Win.</abbr></span> <b data-reading="windows/driver" data-format="open" data-unknown="Unk.">Unk.</b></div>
             </div>
             <div class="pin pin-box door door-fr">
               <span class="pin-label">Passenger</span>
-              <div>Door <b data-reading="doors/passenger" data-format="open">Unknown</b></div>
-              <div>Window <b data-reading="windows/passenger" data-format="open">Unknown</b></div>
+              <div>Door <b data-reading="doors/passenger" data-format="open" data-unknown="Unk.">Unk.</b></div>
+              <div><span class="door-window"><span>Window</span><abbr title="Window">Win.</abbr></span> <b data-reading="windows/passenger" data-format="open" data-unknown="Unk.">Unk.</b></div>
             </div>
-            <div class="pin pin-box seat seat-fl"><span class="pin-label">Seat heat · FL</span><strong data-reading="climate/heatedSeatsFrontLeftLevel" data-format="seat">Unknown</strong></div>
-            <div class="pin pin-box seat seat-fr"><span class="pin-label">Seat heat · FR</span><strong data-reading="climate/heatedSeatsFrontRightLevel" data-format="seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-fl"><span class="pin-label">Seat heat<span class="visually-hidden"> (front left)</span></span><strong data-reading="climate/heatedSeatsFrontLeftLevel" data-format="seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-fr"><span class="pin-label">Seat heat<span class="visually-hidden"> (front right)</span></span><strong data-reading="climate/heatedSeatsFrontRightLevel" data-format="seat">Unknown</strong></div>
             <div class="pin pin-box door door-rl">
               <span class="pin-label">Rear left</span>
-              <div>Door <b data-reading="doors/rearLeft" data-format="open">Unknown</b></div>
-              <div>Window <b data-reading="windows/rearLeft" data-format="open">Unknown</b></div>
+              <div>Door <b data-reading="doors/rearLeft" data-format="open" data-unknown="Unk.">Unk.</b></div>
+              <div><span class="door-window"><span>Window</span><abbr title="Window">Win.</abbr></span> <b data-reading="windows/rearLeft" data-format="open" data-unknown="Unk.">Unk.</b></div>
             </div>
             <div class="pin pin-box door door-rr">
               <span class="pin-label">Rear right</span>
-              <div>Door <b data-reading="doors/rearRight" data-format="open">Unknown</b></div>
-              <div>Window <b data-reading="windows/rearRight" data-format="open">Unknown</b></div>
+              <div>Door <b data-reading="doors/rearRight" data-format="open" data-unknown="Unk.">Unk.</b></div>
+              <div><span class="door-window"><span>Window</span><abbr title="Window">Win.</abbr></span> <b data-reading="windows/rearRight" data-format="open" data-unknown="Unk.">Unk.</b></div>
             </div>
-            <div class="pin pin-box seat seat-rl"><span class="pin-label">Seat heat · RL</span><strong data-reading="climate/heatedSeatsRearLeftLevel" data-format="rear-seat">Unknown</strong></div>
-            <div class="pin pin-box seat seat-rr"><span class="pin-label">Seat heat · RR</span><strong data-reading="climate/heatedSeatsRearRightLevel" data-format="rear-seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-rl"><span class="pin-label">Seat heat<span class="visually-hidden"> (rear left)</span></span><strong data-reading="climate/heatedSeatsRearLeftLevel" data-format="rear-seat">Unknown</strong></div>
+            <div class="pin pin-box seat seat-rr"><span class="pin-label">Seat heat<span class="visually-hidden"> (rear right)</span></span><strong data-reading="climate/heatedSeatsRearRightLevel" data-format="rear-seat">Unknown</strong></div>
             <div class="pin pin-box tyre rear-left"><span class="pin-label">Rear left</span><strong data-reading="tyres/rearLeftPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin pin-box tyre rear-right"><span class="pin-label">Rear right</span><strong data-reading="tyres/rearRightPressure" data-format="pressure">Unknown</strong></div>
             <div class="pin pin-box rear-defrost"><span class="pin-label">Rear defrost</span><strong data-reading="climate/rearWindowDefrosterHeating" data-format="on">Unknown</strong></div>

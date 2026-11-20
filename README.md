@@ -137,15 +137,16 @@ The supplied car image has positioned status pills for tires, doors and windows,
 bonnet/tailgate, front/rear heated seats, steering heat and defrost. The overview
 shows lock, parked/driving/charging, battery and connection. The illustration is left-hand drive; front doors/windows are labeled
 by driver/passenger role, while tires and heated seats are physical left/right.
-Missing or unsupported readings display **Unknown**. Stale readings stay visible
-in amber with a stale-data notice and the last successful vehicle update in the
+Missing or unsupported readings display **Unknown**, shortened to **Unk.** for
+door and window readings. Stale readings stay visible in amber with a stale-data
+notice and the last successful vehicle update in the
 header. Multiple vehicles are never combined. Select `SAIC_VIN` for a single
 vehicle dashboard when an account contains more than one car.
 
 The top timestamp is the stored vehicle observation time, shown as an updating
 “ago” age. The browser reads cached status every ten seconds while visible; those
-reads never poll or wake the car. **Refresh** requests a live poll, **Locate** on
-the hood flashes lights, and **Climate** at the dash opens the automatic-climate
+reads never poll or wake the car. **Refresh** requests a live poll, **Locate** above
+the diagram flashes lights, and **Climate** at the dash opens the automatic-climate
 control. Its optional interior temperature override chooses the existing heating
 routine, not the cabin target. These are all three service control endpoints;
 other labels show status. Commands are disabled while one is running or the
