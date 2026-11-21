@@ -439,11 +439,14 @@ fn vehicle_readings(status: VehicleStatusResp) -> Readings {
         ("doors/rearRight", b.rear_right_door),
         ("doors/bonnet", b.bonnet_status),
         ("doors/boot", b.boot_status),
-        ("climate/steeringWheelHeating", b.steering_heat_level),
     ] {
         if let Some(v @ 0..=1) = value {
             readings.push((key, json!(v == 1)));
         }
+    }
+    // Some models report a heater level (up to 3) in this field.
+    if let Some(level @ 0..=3) = b.steering_heat_level {
+        readings.push(("climate/steeringWheelHeating", json!(level > 0)));
     }
     // Match the gateway's validity guard: door-window flags from incomplete
     // status packets (missing/invalid mileage) must not look closed.

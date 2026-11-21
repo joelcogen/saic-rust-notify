@@ -1089,6 +1089,34 @@ async fn failed_climate_batch_does_not_refresh_or_change_deadline() {
 }
 
 #[test]
+fn steering_heat_levels_decode_to_on_or_off() {
+    for (level, expected) in [
+        (Some(0), Some(false)),
+        (Some(1), Some(true)),
+        (Some(2), Some(true)),
+        (Some(3), Some(true)),
+        (Some(-1), None),
+        (Some(255), None),
+        (None, None),
+    ] {
+        let status = serde_json::from_value(json!({
+            "basicVehicleStatus": {"steeringHeatLevel": level}
+        }))
+        .unwrap();
+        let readings = vehicle_readings(status);
+        let steering_heat = readings
+            .iter()
+            .find(|(key, _)| *key == "climate/steeringWheelHeating")
+            .map(|(_, value)| value);
+        assert_eq!(
+            steering_heat,
+            expected.map(Value::Bool).as_ref(),
+            "{level:?}"
+        );
+    }
+}
+
+#[test]
 fn dashboard_fields_decode_without_inventing_missing_states() {
     let readings: std::collections::BTreeMap<_, _> = vehicle_readings(VehicleStatusResp {
         basic_vehicle_status: Some(BasicVehicleStatus {
