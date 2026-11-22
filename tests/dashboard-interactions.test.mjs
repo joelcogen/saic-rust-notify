@@ -18,8 +18,9 @@ const fixture = () => ({connected:true,ready:true,sources:[{kind:'vehicle',readi
 }}]});
 function element(dataset={}) {
   const handlers = new Map();
+  const classes = new Set();
   return {dataset, hidden:false, disabled:false, value:'', textContent:'', open:false,
-    classList:{toggle(){}}, title:'',
+    classList:{toggle(name, enabled){if(enabled) classes.add(name); else classes.delete(name);},contains:name=>classes.has(name)}, title:'',
     addEventListener:(name,handler)=>handlers.set(name,handler),
     trigger(name){return handlers.get(name)?.({preventDefault(){}});},
     setAttribute(){},removeAttribute(){},focus(){},showModal(){this.open=true;},close(){this.open=false;},
@@ -29,8 +30,9 @@ function harness({stored='', handler, denied=false}={}) {
   const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(match=>['#'+match[1],element()]));
   const labels = [...html.matchAll(/data-reading="([^"]+)" data-format="([^"]+)"(?: data-unknown="([^"]+)")?/g)]
     .map(([,reading,format,unknown])=>element({reading,format,unknown}));
-  const actions = ['/refresh','/locate'].map(action=>element({action}));
+  const actions = ['/refresh','/locate','/battery/heat'].map(action=>element({action}));
   nodes.set('#refresh',actions[0]);
+  nodes.set('#heat-battery',actions[2]);
   const calls = [];
   const values = new Map(stored?[[model.TOKEN_KEY,stored]]:[]);
   const intervals = new Map();
@@ -141,6 +143,36 @@ test('actions use POST once, lock buttons and update only from cached status',as
   assert.equal(h.calls.at(-1).options.method,'GET');
   assert.equal(h.nodes.get('#message').textContent,'Demo lights flashed');
   assert.match(h.nodes.get('#message').className,/alert-success/);
+});
+test('battery heat starts once and becomes a disabled status until the car reports off',async()=>{
+  let heating=false;
+  const h=harness({stored:'synthetic-token',handler:(path,options)=>{
+    if(options.method==='POST'){
+      assert.equal(path,'/battery/heat');
+      assert.equal(options.headers.Authorization,'Bearer synthetic-token');
+      assert.equal(options.body,undefined);
+      heating=true;
+      return response('Battery heating requested');
+    }
+    const state=fixture();
+    state.sources[0].readings['vehicle/drivetrain/batteryHeating']=reading(heating);
+    return response(state);
+  }});
+  await settle();
+  const button=h.nodes.get('#heat-battery');
+  assert.equal(button.textContent,'Heat battery');
+  assert.equal(button.disabled,false);
+  await button.trigger('click');
+  assert.equal(button.textContent,'Battery heating');
+  assert.equal(button.disabled,true);
+  assert.equal(button.classList.contains('btn-outline-secondary'),true);
+  await button.trigger('click');
+  assert.equal(h.calls.filter(call=>call.options.method==='POST').length,1);
+  heating=false;
+  await h.intervals.get(10000)();
+  assert.equal(button.textContent,'Heat battery');
+  assert.equal(button.disabled,false);
+  assert.equal(button.classList.contains('btn-primary'),true);
 });
 test('climate dialog sends interior override only after explicit start',async()=>{
   const h=harness({stored:'synthetic-token'});

@@ -106,13 +106,14 @@ dialog:not([open]) {
 
 .vehicle-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
 }
 
 #stale-notice {
-  flex: 1;
+  flex: 1 0 100%;
   --tblr-alert-padding-x: 0.75rem;
   --tblr-alert-padding-y: 0.5rem;
   --tblr-alert-margin-bottom: 0;

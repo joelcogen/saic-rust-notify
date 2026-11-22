@@ -26,6 +26,7 @@ async fn main() {
             ("doors/locked", json!(true)),
             ("drivetrain/parked", json!(true)),
             ("drivetrain/charging", json!(false)),
+            ("drivetrain/batteryHeating", json!(false)),
             ("drivetrain/soc", json!(78)),
             ("climate/interiorTemperature", json!(18)),
             ("climate/remoteClimateState", json!("off")),
@@ -77,6 +78,11 @@ async fn main() {
                     "climate/remoteClimateState",
                     json!("on"),
                     "Demo climate started",
+                ),
+                Action::HeatBattery => (
+                    "drivetrain/batteryHeating",
+                    json!(true),
+                    "Demo battery heating started",
                 ),
                 Action::Locate => {
                     let _ = request.reply.send(Ok("Demo lights flashed"));

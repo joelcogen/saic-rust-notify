@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 struct Fake {
     calls: Arc<Mutex<Vec<String>>>,
     outcomes: VecDeque<Result<CommandState, ()>>,
+    command_data: Option<Value>,
     login_failures: usize,
     discovery_failures: usize,
     cached: VehicleStatusCacheResp,
@@ -30,6 +31,7 @@ impl Default for Fake {
         Self {
             calls: Default::default(),
             outcomes: Default::default(),
+            command_data: None,
             login_failures: 0,
             discovery_failures: 0,
             cached: Default::default(),
@@ -105,7 +107,7 @@ impl Session for Fake {
         self.calls.lock().unwrap().push("charge".into());
         Ok(self.charge.clone())
     }
-    async fn command(&mut self, _: &str, command: &Command) -> Result<CommandState, ()> {
+    async fn command(&mut self, _: &str, command: &Command) -> Result<CommandOutcome, ()> {
         self.calls
             .lock()
             .unwrap()
@@ -113,6 +115,11 @@ impl Session for Fake {
         self.outcomes
             .pop_front()
             .unwrap_or(Ok(CommandState::Completed))
+            .map(|state| CommandOutcome {
+                state,
+                data: self.command_data.clone(),
+                ..Default::default()
+            })
     }
 }
 fn state() -> SharedTelemetry {
@@ -127,6 +134,109 @@ fn config() -> Config {
         })
     })
     .unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn battery_heating_starts_once_and_refreshes_the_reported_state() {
+    let now = chrono::Utc::now().timestamp();
+    let parked_since = now - schedule::WINDOW;
+    let mut schedules = Schedules::default();
+    schedules
+        .vehicle("SYNTHETIC")
+        .success(parked_since, Observation::default());
+    schedules
+        .vehicle("SYNTHETIC")
+        .success(now, Observation::default());
+    let mut fake = Fake {
+        charge: ChrgMgmtDataResp {
+            chrg_mgmt_data: Some(ChrgMgmtData {
+                bms_ptc_heat_req_dsp_cmd: Some(1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let calls = fake.calls.clone();
+    let shared = state();
+    let worker_state = shared.clone();
+    let (tx, rx) = mpsc::channel(16);
+    let task = tokio::spawn(async move {
+        worker(&mut fake, &config(), &worker_state, rx, &mut schedules).await;
+        schedules
+    });
+    settle().await;
+    let (reply, receive) = oneshot::channel();
+    tx.send(Request {
+        vin: "SYNTHETIC".into(),
+        action: Action::HeatBattery,
+        reply,
+    })
+    .await
+    .unwrap();
+    assert_eq!(receive.await.unwrap(), Ok("Battery heating requested"));
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "login",
+            "discovery",
+            r#"{"kind":"BatteryHeating","ptcHeatReq":1}"#,
+            "vehicle",
+            "charge",
+        ]
+    );
+    let snapshot =
+        shared
+            .read()
+            .await
+            .snapshot(Instant::now(), chrono::Utc::now(), Duration::from_secs(600));
+    let heating = &snapshot["readings"][crate::telemetry::BATTERY_HEATING];
+    assert_eq!(
+        heating,
+        &json!({"value":true,"retained":false,"fresh":true})
+    );
+    drop(tx);
+    let mut schedules = task.await.unwrap();
+    let schedule = schedules.vehicle("SYNTHETIC");
+    assert_eq!(schedule.parked_since, Some(parked_since));
+    assert!((now + 30..=now + 31).contains(&schedule.due()));
+}
+
+#[tokio::test]
+async fn battery_heating_failure_from_the_vehicle_is_reported_without_replay() {
+    let mut fake = Fake {
+        command_data: Some(json!({"ptcHeatResp":7})),
+        ..Default::default()
+    };
+    assert_eq!(
+        execute(&mut fake, &state(), "SYNTHETIC", Action::HeatBattery).await,
+        Err("The car reports a battery heating system failure")
+    );
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn battery_heating_readings_distinguish_off_from_unknown() {
+    for (code, expected) in [
+        (Some(1), Some(true)),
+        (Some(2), Some(false)),
+        (Some(0), None),
+        (None, None),
+    ] {
+        let readings = charge_readings(ChrgMgmtDataResp {
+            chrg_mgmt_data: Some(ChrgMgmtData {
+                bms_ptc_heat_req_dsp_cmd: code,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            readings.into_iter().find_map(|(key, value)| {
+                (key == "drivetrain/batteryHeating").then(|| value.as_bool().unwrap())
+            }),
+            expected
+        );
+    }
 }
 
 #[tokio::test]

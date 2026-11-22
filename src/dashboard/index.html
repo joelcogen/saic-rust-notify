@@ -72,8 +72,9 @@
         </div>
         <div class="vehicle-layout">
           <div class="vehicle-toolbar">
-            <div id="stale-notice" class="alert alert-warning" role="status" hidden>Some readings are stale.</div>
+            <button type="button" id="heat-battery" class="btn btn-primary" data-action="/battery/heat">Heat battery</button>
             <button type="button" class="btn btn-primary locate-control" data-action="/locate">Locate</button>
+            <div id="stale-notice" class="alert alert-warning" role="status" hidden>Some readings are stale.</div>
           </div>
           <div class="car-map" role="group" aria-label="Vehicle diagram, front at the top">
             <img src="/car.jpg" alt="Top view of a red car with visible seats and steering wheel" width="853" height="1280">

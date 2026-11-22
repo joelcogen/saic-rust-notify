@@ -1,5 +1,5 @@
 use crate::{
-    telemetry::{ControlError, SharedTelemetry, Source},
+    telemetry::{ControlError, SharedTelemetry, Source, BATTERY_HEATING},
     vehicle::{Action, Request},
 };
 use chrono::Utc;
@@ -39,7 +39,10 @@ impl Controls {
         path: &str,
         temperature: Option<f64>,
     ) -> Result<&'static str, &'static str> {
-        if !matches!(path, "/refresh" | "/locate" | "/climate/start") {
+        if !matches!(
+            path,
+            "/refresh" | "/locate" | "/climate/start" | "/battery/heat"
+        ) {
             return Err("Unknown vehicle control");
         }
         if temperature.is_some_and(|t| !t.is_finite()) {
@@ -58,6 +61,20 @@ impl Controls {
                 ControlError::DiscoveryIncomplete => "Vehicle discovery incomplete",
             })?
             .to_owned();
+        if path == "/battery/heat"
+            && state
+                .fresh(
+                    &Source::Vehicle(vin.clone()),
+                    BATTERY_HEATING,
+                    Instant::now(),
+                    Utc::now(),
+                    self.ttl,
+                )
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            return Ok("Battery heating is already on");
+        }
         let temperature = if path == "/climate/start" && temperature.is_none() {
             let source = Source::Vehicle(vin.clone());
             Some(
@@ -79,6 +96,7 @@ impl Controls {
         let action = match path {
             "/refresh" => Action::Refresh,
             "/locate" => Action::Locate,
+            "/battery/heat" => Action::HeatBattery,
             _ => Action::Climate(temperature.unwrap_or(20.)),
         };
         let (reply, receive) = oneshot::channel();

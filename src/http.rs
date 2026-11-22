@@ -96,7 +96,10 @@ async fn respond(api: Api, request: Request) -> Response {
     let status = request.method() == "GET" && path == "/api/status";
     if !(status
         || request.method() == "POST"
-            && matches!(path.as_str(), "/climate/start" | "/refresh" | "/locate"))
+            && matches!(
+                path.as_str(),
+                "/climate/start" | "/refresh" | "/locate" | "/battery/heat"
+            ))
     {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }

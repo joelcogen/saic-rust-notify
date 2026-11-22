@@ -17,6 +17,7 @@ pub const WINDOW: i64 = 48 * 3600;
 pub struct Observation {
     pub active: bool,
     pub charging: bool,
+    pub battery_heating: bool,
     pub power: Option<f64>,
     pub capacity: Option<f64>,
     pub remaining: Option<i64>,
@@ -42,6 +43,7 @@ impl Observation {
             return result;
         };
         result.charging = matches!(b.bms_chrg_sts, Some(1 | 3 | 10 | 12));
+        result.battery_heating = super::battery_heating(b.bms_ptc_heat_req_dsp_cmd) == Some(true);
         if b.bms_pack_crnt_v == Some(0) {
             if let (Some(current @ 0..=65535), Some(voltage @ 0..=65535)) =
                 (b.bms_pack_crnt, b.bms_pack_vol)
@@ -146,6 +148,9 @@ impl Schedule {
                 // The 48-hour poll is followed by the first 24-hour interval.
                 epoch + WINDOW + ((age - WINDOW) / DAY + 1) * DAY
             };
+        }
+        if observation.battery_heating {
+            self.next = self.next.min(now + ACTIVE);
         }
     }
     pub fn failure(&mut self, now: i64) {

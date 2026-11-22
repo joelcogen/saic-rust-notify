@@ -6,7 +6,7 @@ use axum::{
 use saic_rust_notify::{
     controls::{climate_plan, parse_temperature, Controls},
     http::router,
-    telemetry::{decode, Telemetry},
+    telemetry::{decode, Message, Source, Telemetry},
     vehicle::{Action, Request as VehicleRequest},
 };
 use serde_json::{json, Value};
@@ -72,7 +72,13 @@ async fn call(
 async fn auth_validation_and_unknown_routes() {
     let (controls, mut rx) = setup().await;
     let app = router(controls.clone(), Some("test-secret"));
-    for path in ["/api/status", "/climate/start", "/refresh", "/locate"] {
+    for path in [
+        "/api/status",
+        "/climate/start",
+        "/refresh",
+        "/locate",
+        "/battery/heat",
+    ] {
         for token in [None, Some("Bearer wrong"), Some("bearer test-secret")] {
             assert_eq!(
                 call(app.clone(), "POST", path, "", token, None).await.0,
@@ -146,7 +152,7 @@ async fn auth_validation_and_unknown_routes() {
         .0,
         400
     );
-    for path in ["/api/status", "/refresh", "/locate"] {
+    for path in ["/api/status", "/refresh", "/locate", "/battery/heat"] {
         assert_eq!(
             call(
                 app.clone(),
@@ -240,9 +246,14 @@ async fn controls_wait_for_completion_and_notify_only_on_full_success() {
 }
 
 #[tokio::test]
-async fn refresh_locate_and_temperature_selection() {
+async fn refresh_locate_battery_heat_and_temperature_selection() {
     let (c, mut rx) = setup().await;
-    for (path, expected) in [("/refresh", 202), ("/locate", 200), ("/climate/start", 200)] {
+    for (path, expected) in [
+        ("/refresh", 202),
+        ("/locate", 200),
+        ("/battery/heat", 200),
+        ("/climate/start", 200),
+    ] {
         let task = tokio::spawn(call(
             router(c.clone(), Some("test-secret")),
             "POST",
@@ -256,6 +267,7 @@ async fn refresh_locate_and_temperature_selection() {
             (path, request.action),
             ("/refresh", Action::Refresh)
                 | ("/locate", Action::Locate)
+                | ("/battery/heat", Action::HeatBattery)
                 | ("/climate/start", Action::Climate(5.))
         ));
         request.reply.send(Ok("done")).unwrap();
@@ -299,7 +311,7 @@ async fn refresh_locate_and_temperature_selection() {
         Err("Fresh interior temperature is unavailable")
     );
     c.state.write().await.set_connected(false);
-    for path in ["/refresh", "/locate", "/climate/start"] {
+    for path in ["/refresh", "/locate", "/climate/start", "/battery/heat"] {
         assert!(c.execute(path, Some(2.)).await.is_err());
     }
     assert!(rx.try_recv().is_err());
@@ -318,6 +330,30 @@ async fn refresh_locate_and_temperature_selection() {
         body["readings"]["vehicle/climate/interiorTemperature"]["fresh"],
         false
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn battery_heat_skips_a_duplicate_start_while_heating_is_fresh() {
+    let (controls, mut receiver) = setup().await;
+    controls
+        .state
+        .write()
+        .await
+        .ingest(
+            Message {
+                source: Source::Vehicle(BASE.into()),
+                key: "vehicle/drivetrain/batteryHeating".into(),
+                value: json!(true),
+            },
+            false,
+            Instant::now(),
+        )
+        .unwrap();
+    assert_eq!(
+        controls.execute("/battery/heat", None).await,
+        Ok("Battery heating is already on")
+    );
+    assert!(receiver.try_recv().is_err());
 }
 
 #[tokio::test(start_paused = true)]

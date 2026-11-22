@@ -12,6 +12,12 @@ let session = 0;
 let unavailable = false;
 let storageWarning = false;
 const commands = [...document.querySelectorAll('[data-action]'), $('#start-climate')];
+const actionMessages = {
+  '/refresh': 'Refreshing vehicle data…',
+  '/locate': 'Requesting a light flash…',
+  '/battery/heat': 'Requesting battery heating…',
+  '/climate/start': 'Starting climate. This may take a few minutes…',
+};
 
 function message(text, tone = 'secondary') {
   const notice = $('#message');
@@ -42,6 +48,13 @@ function showDashboard() {
 }
 function updateButtons() {
   for (const button of commands) button.disabled = busy || unavailable || snapshot?.ready !== true;
+  const heatBattery = $('#heat-battery');
+  const heater = readings['vehicle/drivetrain/batteryHeating'];
+  const heating = heater?.fresh === true && heater.value === true;
+  heatBattery.disabled ||= heating;
+  heatBattery.classList.toggle('btn-primary', !heating);
+  heatBattery.classList.toggle('btn-outline-secondary', heating);
+  heatBattery.textContent = heating ? 'Battery heating' : 'Heat battery';
   $('#refresh').textContent = busy ? '…' : '↻';
   $('#dashboard').setAttribute('aria-busy', String(busy));
 }
@@ -172,19 +185,23 @@ async function act(path, body) {
   if (busy || unavailable || snapshot?.ready !== true) return;
   busy = true;
   updateButtons();
-  message(path === '/refresh' ? 'Refreshing vehicle data…' : path === '/locate' ? 'Requesting a light flash…' : 'Starting climate. This may take a few minutes…');
+  message(actionMessages[path]);
   try {
     const result = await request(path, 'POST', body);
     message(result, 'success');
   } catch (error) { handleError(error); }
   finally {
-    busy = false;
-    updateButtons();
     // Cached read only, including after uncertain command outcomes. Never replay.
     await loadStatus(true);
+    busy = false;
+    updateButtons();
   }
 }
-for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', () => act(button.dataset.action));
+for (const button of document.querySelectorAll('[data-action]')) {
+  button.addEventListener('click', () => {
+    if (!button.disabled) return act(button.dataset.action);
+  });
+}
 $('#open-climate').addEventListener('click', () => $('#climate-dialog').showModal());
 $('#close-climate').addEventListener('click', () => $('#climate-dialog').close());
 $('#climate-form').addEventListener('submit', event => {

@@ -8,6 +8,7 @@ use std::{
 };
 
 pub const MAX_PAYLOAD: usize = 256 * 1024;
+pub(crate) const BATTERY_HEATING: &str = "vehicle/drivetrain/batteryHeating";
 const MAX_READINGS: usize = 4096;
 const MAX_SOURCES: usize = 128;
 const MAX_STATE_BYTES: usize = 16 * 1024 * 1024;
@@ -263,6 +264,7 @@ impl Telemetry {
                 | "vehicle/drivetrain/power"
                 | "vehicle/drivetrain/remainingChargingTime"
                 | "vehicle/drivetrain/chargerConnected"
+                | BATTERY_HEATING
         );
         let stamp_key = if charge {
             "vehicle/refresh/lastChargeState"

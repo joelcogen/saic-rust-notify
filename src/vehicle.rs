@@ -7,7 +7,8 @@ use crate::{
 };
 use saic_client::{
     models::{ChrgMgmtDataResp, VehicleListResp, VehicleStatusCacheResp, VehicleStatusResp},
-    ClientConfig, Command, CommandOptions, CommandState, Credentials, FindCarMode, SaicClient,
+    ClientConfig, Command, CommandOptions, CommandOutcome, CommandState, Credentials, FindCarMode,
+    SaicClient,
 };
 use serde_json::{json, Value};
 use std::{
@@ -22,6 +23,7 @@ use schedule::{Observation, Schedules};
 pub enum Action {
     Refresh,
     Locate,
+    HeatBattery,
     Climate(f64),
 }
 pub struct Request {
@@ -38,7 +40,7 @@ trait Session {
     async fn cached(&mut self, vin: &str) -> Result<VehicleStatusCacheResp, ()>;
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()>;
     async fn charge(&mut self, vin: &str) -> Result<ChrgMgmtDataResp, ()>;
-    async fn command(&mut self, vin: &str, command: &Command) -> Result<CommandState, ()>;
+    async fn command(&mut self, vin: &str, command: &Command) -> Result<CommandOutcome, ()>;
 }
 impl Session for SaicClient {
     async fn login(&mut self) -> Result<(), ()> {
@@ -66,10 +68,9 @@ impl Session for SaicClient {
             .await
             .map_err(|_| ())
     }
-    async fn command(&mut self, vin: &str, command: &Command) -> Result<CommandState, ()> {
+    async fn command(&mut self, vin: &str, command: &Command) -> Result<CommandOutcome, ()> {
         self.execute_command(vin, command, CommandOptions::default())
             .await
-            .map(|o| o.state)
             .map_err(|_| ())
     }
 }
@@ -210,7 +211,11 @@ async fn worker(
                     let _ = request.reply.send(Err("A single authorized vehicle is required"));
                     continue;
                 }
-                let climate = matches!(request.action, Action::Climate(_));
+                let refresh_after = match request.action {
+                    Action::Climate(_) => Some("climate"),
+                    Action::HeatBattery => Some("battery_heating"),
+                    _ => None,
+                };
                 let result = if matches!(request.action, Action::Refresh) {
                     poll_vehicle(client, state, &request.vin, schedules, &now).await
                         .map(|()| "Vehicle refreshed").map_err(|()| "Vehicle refresh failed")
@@ -220,10 +225,10 @@ async fn worker(
                 // Refresh once after the complete batch, using the same scheduling
                 // and backoff as an explicit refresh. A read failure must not turn
                 // completed commands into a failure that callers might retry.
-                let refresh_failed = climate && result.is_ok()
+                let refresh_failed = refresh_after.is_some() && result.is_ok()
                     && poll_vehicle(client, state, &request.vin, schedules, &now).await.is_err();
                 if refresh_failed {
-                    tracing::warn!("Climate completed but telemetry refresh failed; polling will retry");
+                    tracing::warn!(control = refresh_after, "Control completed but telemetry refresh failed; polling will retry");
                 }
                 if result.is_err() || refresh_failed {
                     state.write().await.fail_vehicle(&request.vin);
@@ -301,13 +306,36 @@ async fn execute(
             vec![Command::find_my_car(FindCarMode::LightsOnly)],
             "Flashing lights",
         ),
+        Action::HeatBattery => (
+            vec![Command::control_battery_heating(true)],
+            "Battery heating requested",
+        ),
         Action::Climate(temperature) => climate_plan(temperature),
     };
     for (index, command) in commands.iter().enumerate() {
-        match client.command(vin, command).await {
-            Ok(CommandState::Completed) => {},
-            Ok(CommandState::Rejected) if index == 0 => return Err("Vehicle command rejected"),
-            Ok(CommandState::Rejected) => return Err("Climate partial failure; earlier commands succeeded. Check vehicle state before retrying."),
+        let outcome = client.command(vin, command).await.map_err(|_| UNKNOWN)?;
+        if matches!(command, Command::BatteryHeating { .. })
+            && matches!(
+                outcome.state,
+                CommandState::Completed | CommandState::Rejected
+            )
+        {
+            match outcome
+                .data
+                .as_ref()
+                .and_then(|data| data["ptcHeatResp"].as_i64())
+            {
+                None | Some(0) => {}
+                Some(2) => return Err("Battery charge is too low for heating"),
+                Some(4) => return Err("The car reports that battery heating is unnecessary"),
+                Some(7) => return Err("The car reports a battery heating system failure"),
+                Some(_) => return Err("The car declined or stopped battery heating"),
+            }
+        }
+        match outcome.state {
+            CommandState::Completed => {},
+            CommandState::Rejected if index == 0 => return Err("Vehicle command rejected"),
+            CommandState::Rejected => return Err("Climate partial failure; earlier commands succeeded. Check vehicle state before retrying."),
             _ => return Err(UNKNOWN),
         }
     }
@@ -523,6 +551,14 @@ fn vehicle_readings(status: VehicleStatusResp) -> Readings {
     }
     readings
 }
+fn battery_heating(request: Option<i64>) -> Option<bool> {
+    match request {
+        Some(1) => Some(true),
+        Some(2) => Some(false),
+        _ => None,
+    }
+}
+
 fn charge_readings(status: ChrgMgmtDataResp) -> Readings {
     let mut readings = Vec::new();
     let Some(b) = status.chrg_mgmt_data else {
@@ -536,6 +572,9 @@ fn charge_readings(status: ChrgMgmtDataResp) -> Readings {
     }
     if let Some(v @ 0..=13) = b.bms_chrg_sts {
         readings.push(("drivetrain/charging", json!(matches!(v, 1 | 3 | 10 | 12))));
+    }
+    if let Some(heating) = battery_heating(b.bms_ptc_heat_req_dsp_cmd) {
+        readings.push(("drivetrain/batteryHeating", json!(heating)));
     }
     if let (Some(ac @ 0..=1), Some(dc @ 0..=1)) =
         (b.ccu_onbd_chrgr_plug_on, b.ccu_off_bd_chrgr_plug_on)

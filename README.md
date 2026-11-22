@@ -117,7 +117,8 @@ not interpreted as zero or off.
 The adapter maps interior temperature, cabin climate, front/rear seat heating, steering
 and rear-window heating, locks, individual doors/windows, bonnet, tailgate, tire
 pressures, parked/running state, SOC/target, charging/plug state, power and remaining charging
-time to the existing Notify fields. Protocol scaling is converted to Celsius,
+time to the existing Notify fields. Battery heater state is available as
+`vehicle/drivetrain/batteryHeating`. Protocol scaling is converted to Celsius,
 percent, kW and seconds. API transport, authentication, command payloads and event
 continuation are owned by `saic-client`.
 
@@ -145,12 +146,13 @@ vehicle dashboard when an account contains more than one car.
 
 The top timestamp is the stored vehicle observation time, shown as an updating
 “ago” age. The browser reads cached status every ten seconds while visible; those
-reads never poll or wake the car. **Refresh** requests a live poll, **Locate** above
-the diagram flashes lights, and **Climate** at the dash opens the automatic-climate
-control. Its optional interior temperature override chooses the existing heating
-routine, not the cabin target. These are all three service control endpoints;
-other labels show status. Commands are disabled while one is running or the
-service is unavailable, and errors/uncertain outcomes are never retried automatically.
+reads never poll or wake the car. **Refresh** requests a live poll. Above the
+diagram, **Heat battery** starts battery heating and **Locate** flashes lights.
+When fresh telemetry reports the heater is on, its button reads **Battery heating**
+and is disabled. **Climate** at the dash opens the automatic-climate control. Its
+optional interior temperature override chooses the heating routine. Commands are
+disabled while one is running or the service is unavailable, and errors and
+uncertain outcomes are never retried automatically.
 
 The shell, stylesheets, scripts, favicon and vehicle image are public, contain no
 account data, and are embedded in the executable. All telemetry and actions require
@@ -186,6 +188,11 @@ reverse proxy for access beyond loopback; this listener speaks HTTP.
   preserving known parking age. Login, status and widget reads do not poll the car.
 - `POST /locate`: flash lights only, never sound the horn; return 200 after API
   completion. Completion does not prove the physical vehicle action occurred.
+- `POST /battery/heat`: start traction battery heating; return 200 when SAIC
+  accepts the request or fresh telemetry already shows heating. After an accepted
+  start, the service refreshes telemetry once and reports the heater state from
+  charging-management data. While the heater is reported on, the next poll is
+  due within 30 seconds of the last successful poll.
 
 Climate starts front defrost at <=4°C, otherwise A/C at 22°C using the client's
 standard temperature profile. At <=6°C it then heats left seat, right seat and
@@ -200,7 +207,7 @@ replayed. Failed command batches do not trigger a refresh. Locate leaves polling
 deadlines unchanged. Controls are mutually exclusive.
 
 Bodies are limited to 4096 bytes and a five-second read timeout. Transfer-Encoding,
-malformed JSON, unknown keys and bodies on status/refresh/locate return 400.
+malformed JSON, unknown keys and bodies on status/refresh/locate/battery heat return 400.
 Authentication failures return 401; authenticated requests to unknown routes
 return 404. Unavailability, rejection, partial failure and uncertain outcomes
 return 503 with redacted messages. Unavailable session/discovery, ambiguous
