@@ -65,6 +65,33 @@ fn manual_reads_do_not_move_epoch_and_delays_skip_missed_ticks() {
 }
 
 #[test]
+fn alarms_coalesce_and_respect_recent_reads_charging_and_backoff() {
+    let mut s = Schedule::default();
+    s.success(0, parked());
+    s.success(700, parked());
+    s.note_alarm(710);
+    s.note_alarm(720);
+    assert_eq!(s.due(), 760);
+    s.success(730, parked()); // An intervening manual read satisfies both alerts.
+    assert_eq!(s.due(), HALF_DAY);
+    assert_eq!(s.parked_since, Some(0));
+
+    s.note_alarm(1000);
+    assert_eq!(s.due(), 1000);
+    s.success(1000, charging(-7.));
+    let charging_due = s.due();
+    s.note_alarm(1100);
+    assert_eq!(s.due(), charging_due);
+
+    for now in [charging_due, charging_due + 30, charging_due + 90] {
+        s.failure(now);
+    }
+    let retry = s.due();
+    s.note_alarm(retry - 30);
+    assert_eq!(s.due(), retry);
+}
+
+#[test]
 fn charging_precedes_active_and_has_dynamic_bounds_and_trickle_fallback() {
     let mut s = Schedule::default();
     s.success(0, charging(-10.));

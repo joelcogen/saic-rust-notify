@@ -6,7 +6,9 @@ use crate::{
     telemetry::{Message, SharedTelemetry, Source},
 };
 use saic_client::{
-    models::{ChrgMgmtDataResp, VehicleListResp, VehicleStatusCacheResp, VehicleStatusResp},
+    models::{
+        ChrgMgmtDataResp, MessageEntity, VehicleListResp, VehicleStatusCacheResp, VehicleStatusResp,
+    },
     ClientConfig, Command, CommandOptions, CommandOutcome, CommandState, Credentials, FindCarMode,
     SaicClient,
 };
@@ -17,7 +19,9 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+mod inbox;
 mod schedule;
+use inbox::{Inbox, InboxError};
 use schedule::{Observation, Schedules};
 
 pub enum Action {
@@ -37,6 +41,7 @@ pub struct Request {
 trait Session {
     async fn login(&mut self) -> Result<(), ()>;
     async fn vehicles(&mut self) -> Result<VehicleListResp, ()>;
+    async fn alarms(&mut self, page: u32, size: u32) -> Result<Vec<MessageEntity>, InboxError>;
     async fn cached(&mut self, vin: &str) -> Result<VehicleStatusCacheResp, ()>;
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()>;
     async fn charge(&mut self, vin: &str) -> Result<ChrgMgmtDataResp, ()>;
@@ -52,6 +57,23 @@ impl Session for SaicClient {
         SaicClient::vehicles(self)
             .await
             .map_err(|error| log_session_error("discovery", &error))
+    }
+    async fn alarms(&mut self, page: u32, size: u32) -> Result<Vec<MessageEntity>, InboxError> {
+        self.get_alarm_list(page, size)
+            .await
+            .map(|response| {
+                response
+                    .and_then(|result| result.messages)
+                    .unwrap_or_default()
+            })
+            .map_err(|error| {
+                log_session_error("alarm_inbox", &error);
+                if matches!(error, saic_client::Error::Authentication(_)) || !self.is_logged_in() {
+                    InboxError::SessionExpired
+                } else {
+                    InboxError::Unavailable
+                }
+            })
     }
     async fn cached(&mut self, vin: &str) -> Result<VehicleStatusCacheResp, ()> {
         self.vehicle_status_cached(vin, CommandOptions::default())
@@ -164,6 +186,7 @@ async fn worker(
     let epoch = chrono::Utc::now().timestamp();
     let now = || epoch + start.elapsed().as_secs() as i64;
     let mut vins = Vec::new();
+    let mut inbox = Inbox::default();
     let mut authenticated = false;
     loop {
         if !authenticated {
@@ -202,6 +225,7 @@ async fn worker(
             .map(|vin| schedules.vehicle(vin).due())
             .min()
             .unwrap();
+        let due = due.min(inbox.next_check);
         let wait = Duration::from_secs(due.saturating_sub(now()).max(0) as u64);
         tokio::select! {
             request = requests.recv() => {
@@ -252,6 +276,22 @@ async fn worker(
                             return;
                         }
                     }
+                }
+                if authenticated && inbox.next_check <= now() {
+                    inbox.next_check = now() + inbox::CHECK_INTERVAL;
+                    match inbox.check(client, &vins).await {
+                        Ok(vehicles) => {
+                            for vin in vehicles {
+                                schedules.vehicle(vin).note_alarm(now());
+                            }
+                        }
+                        Err(InboxError::SessionExpired) => authenticated = false,
+                        Err(InboxError::Unavailable) => {}
+                    }
+                }
+                if authenticated {
+                    // Vehicle polls were saved above. Inbox tracking is in memory.
+                    continue;
                 }
             }
         }

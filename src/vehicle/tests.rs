@@ -18,6 +18,8 @@ struct Fake {
     discovery_failures: usize,
     cached: VehicleStatusCacheResp,
     cache_calls: Arc<Mutex<usize>>,
+    alarm_pages: VecDeque<Result<Vec<MessageEntity>, InboxError>>,
+    alarm_calls: Arc<Mutex<Vec<u32>>>,
     read_failure: bool,
     read_failures: usize,
     vehicle_calls: Arc<Mutex<Vec<String>>>,
@@ -36,6 +38,8 @@ impl Default for Fake {
             discovery_failures: 0,
             cached: Default::default(),
             cache_calls: Default::default(),
+            alarm_pages: Default::default(),
+            alarm_calls: Default::default(),
             read_failure: false,
             read_failures: 0,
             vehicle_calls: Default::default(),
@@ -85,6 +89,12 @@ impl Session for Fake {
     async fn cached(&mut self, _: &str) -> Result<VehicleStatusCacheResp, ()> {
         *self.cache_calls.lock().unwrap() += 1;
         Ok(self.cached.clone())
+    }
+    async fn alarms(&mut self, page: u32, _: u32) -> Result<Vec<MessageEntity>, InboxError> {
+        self.alarm_calls.lock().unwrap().push(page);
+        self.alarm_pages
+            .pop_front()
+            .unwrap_or_else(|| Ok(Vec::new()))
     }
     async fn vehicle(&mut self, vin: &str) -> Result<VehicleStatusResp, ()> {
         self.calls.lock().unwrap().push("vehicle".into());
@@ -563,6 +573,120 @@ async fn settle() {
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
+}
+
+fn alarm(id: impl Into<String>, vin: Option<&str>) -> MessageEntity {
+    MessageEntity {
+        message_id: Some(saic_client::MessageId::Text(id.into())),
+        vin: vin.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn inbox_baselines_history_and_stops_paging_at_known_messages() {
+    let mut client = Fake::default();
+    let mut inbox = Inbox::default();
+    let vins = ["SYNTHETIC".to_owned()];
+    let old = alarm("baseline", Some("SYNTHETIC"));
+    let burst: Vec<_> = (0..20)
+        .map(|n| alarm(format!("burst-{n}"), Some("OTHER")))
+        .collect();
+    let new = alarm("new", Some("SYNTHETIC"));
+    client.alarm_pages.extend([
+        Ok(vec![old.clone()]),
+        Ok(burst.clone()),
+        Err(InboxError::Unavailable),
+        Ok(burst.clone()),
+        Ok(vec![
+            new.clone(),
+            alarm("unattributed", None),
+            old.clone(),
+            alarm("older", Some("SYNTHETIC")),
+        ]),
+        Ok(vec![new, old]),
+    ]);
+
+    assert!(inbox.check(&mut client, &vins).await.unwrap().is_empty());
+    assert!(matches!(
+        inbox.check(&mut client, &vins).await,
+        Err(InboxError::Unavailable)
+    ));
+    assert_eq!(
+        inbox.check(&mut client, &vins).await.unwrap(),
+        ["SYNTHETIC"].into()
+    );
+    assert!(inbox.check(&mut client, &vins).await.unwrap().is_empty());
+    assert_eq!(*client.alarm_calls.lock().unwrap(), [1, 1, 2, 1, 2, 1]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn worker_checks_inbox_while_parked_and_refreshes_only_the_alerted_vehicle() {
+    let history = alarm("historical", Some("SYNTHETIC-A"));
+    let new = alarm("new", Some("SYNTHETIC-B"));
+    let alarms = [
+        Ok(vec![history.clone()]),
+        Err(InboxError::Unavailable),
+        Ok(vec![new.clone(), history.clone()]),
+        Ok(vec![
+            alarm("while-charging", Some("SYNTHETIC-B")),
+            new,
+            history,
+        ]),
+    ];
+    let now = chrono::Utc::now().timestamp();
+    let client = Fake {
+        fleet: vec!["SYNTHETIC-A".into(), "SYNTHETIC-B".into()],
+        alarm_pages: alarms.into(),
+        charge: ChrgMgmtDataResp {
+            chrg_mgmt_data: Some(ChrgMgmtData {
+                bms_chrg_sts: Some(3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Fake::default()
+    };
+    let alarm_calls = client.alarm_calls.clone();
+    let vehicle_calls = client.vehicle_calls.clone();
+    let telemetry = state();
+    let (tx, rx) = mpsc::channel(1);
+    let handle = tokio::spawn(async move {
+        let mut client = client;
+        let mut schedules = Schedules::default();
+        for vin in ["SYNTHETIC-A", "SYNTHETIC-B"] {
+            schedules
+                .vehicle(vin)
+                .success(now - schedule::DAY - 3600, Observation::default());
+            schedules
+                .vehicle(vin)
+                .success(now - 10, Observation::default());
+        }
+        worker(&mut client, &config(), &telemetry, rx, &mut schedules).await;
+    });
+    settle().await;
+    assert_eq!(*alarm_calls.lock().unwrap(), [1]);
+    assert!(vehicle_calls.lock().unwrap().is_empty());
+
+    tokio::time::advance(Duration::from_secs(59)).await;
+    settle().await;
+    assert_eq!(*alarm_calls.lock().unwrap(), [1]);
+    tokio::time::advance(Duration::from_secs(1)).await;
+    settle().await;
+    assert_eq!(*alarm_calls.lock().unwrap(), [1, 1]);
+    assert!(vehicle_calls.lock().unwrap().is_empty());
+
+    tokio::time::advance(Duration::from_secs(60)).await;
+    settle().await;
+    assert_eq!(*alarm_calls.lock().unwrap(), [1, 1, 1]);
+    assert_eq!(*vehicle_calls.lock().unwrap(), ["SYNTHETIC-B"]);
+
+    tokio::time::advance(Duration::from_secs(60)).await;
+    settle().await;
+    assert_eq!(*alarm_calls.lock().unwrap(), [1, 1, 1, 1]);
+    assert_eq!(*vehicle_calls.lock().unwrap(), ["SYNTHETIC-B"]);
+    drop(tx);
+    handle.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]

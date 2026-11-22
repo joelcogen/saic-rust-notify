@@ -12,6 +12,7 @@ pub const GRACE: i64 = 600;
 pub const HALF_DAY: i64 = 12 * 3600;
 pub const DAY: i64 = 24 * 3600;
 pub const WINDOW: i64 = 48 * 3600;
+const ALARM_REFRESH_GAP: i64 = 60;
 
 #[derive(Default)]
 pub struct Observation {
@@ -91,6 +92,8 @@ pub struct Schedule {
     charging_interval: i64,
     pub next: i64,
     scheduled: Option<i64>,
+    #[serde(skip)]
+    alarm_due: Option<i64>,
 }
 impl Schedule {
     pub fn due(&self) -> i64 {
@@ -99,7 +102,21 @@ impl Schedule {
         if self.last_activity > self.last_poll {
             return self.last_activity.unwrap();
         }
-        self.scheduled.map_or(self.next, |s| s.min(self.next))
+        [self.scheduled, self.alarm_due]
+            .into_iter()
+            .flatten()
+            .fold(self.next, i64::min)
+    }
+    pub fn note_alarm(&mut self, now: i64) {
+        if self.failures > 0 || self.charging_interval > 0 {
+            return;
+        }
+        let due = self
+            .last_poll
+            .map_or(now, |last| now.max(last + ALARM_REFRESH_GAP));
+        if due < self.due() {
+            self.alarm_due = Some(due);
+        }
     }
     fn inactive_interval(&self, now: i64) -> i64 {
         if self.parked_since.is_some_and(|epoch| now - epoch < WINDOW) {
@@ -110,6 +127,7 @@ impl Schedule {
     }
     pub fn success(&mut self, now: i64, observation: Observation) {
         self.last_poll = Some(now);
+        self.alarm_due = None;
         self.failures = 0;
         self.scheduled = observation.scheduled;
         if observation.active || observation.charging {
@@ -155,6 +173,7 @@ impl Schedule {
     }
     pub fn failure(&mut self, now: i64) {
         self.last_poll = Some(now);
+        self.alarm_due = None;
         let delay = ACTIVE
             .saturating_mul(1i64 << self.failures.min(30))
             .min(self.inactive_interval(now));

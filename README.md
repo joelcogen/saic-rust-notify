@@ -77,7 +77,18 @@ corrections are unavailable. Low power (at most 1 kW), missing power or missing
 capacity uses at least 120 seconds, retaining a longer prior charging interval.
 An enabled vehicle charging schedule triggers a check ten minutes after its start
 in the service's local timezone, matching the gateway default timezone behavior.
-No extra schedule or activity-detection API reads are added.
+
+The service checks the SAIC account's alarm inbox every 60 seconds through a
+read-only account request. The first successful check establishes a baseline.
+Later checks look for new message IDs at the head of the inbox, reading up to
+three pages of 20 entries and stopping at a known ID or the end of the inbox.
+New alerts with a VIN matching a discovered, selected vehicle can bring its
+next live poll forward. Alerts for the same vehicle share one pending refresh,
+scheduled at least 60 seconds after the last poll. Any intervening live poll
+satisfies the pending refresh. Charging and error recovery use their normal
+deadlines. Inbox failures leave the vehicle schedule in place. An expired SAIC
+session follows the existing login flow. Inbox tracking stays in memory, and
+the service uses message IDs and VINs for matching only.
 
 All policy values are constants; there are no polling settings or modes. The
 former interval environment setting is ignored. Status and Notify reads only use
